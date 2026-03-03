@@ -1,0 +1,75 @@
+pub mod io;
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkloadProfile {
+    pub version: u8,
+    pub captured_at: DateTime<Utc>,
+    pub source_host: String,
+    pub pg_version: String,
+    pub capture_method: String,
+    pub sessions: Vec<Session>,
+    pub metadata: Metadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub id: u64,
+    pub user: String,
+    pub database: String,
+    pub queries: Vec<Query>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Query {
+    pub sql: String,
+    pub start_offset_us: u64,
+    pub duration_us: u64,
+    pub kind: QueryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueryKind {
+    Select,
+    Insert,
+    Update,
+    Delete,
+    Ddl,
+    Other,
+}
+
+impl QueryKind {
+    pub fn from_sql(sql: &str) -> Self {
+        let trimmed = sql.trim_start().to_uppercase();
+        if trimmed.starts_with("SELECT") || trimmed.starts_with("WITH") {
+            QueryKind::Select
+        } else if trimmed.starts_with("INSERT") {
+            QueryKind::Insert
+        } else if trimmed.starts_with("UPDATE") {
+            QueryKind::Update
+        } else if trimmed.starts_with("DELETE") {
+            QueryKind::Delete
+        } else if trimmed.starts_with("CREATE")
+            || trimmed.starts_with("ALTER")
+            || trimmed.starts_with("DROP")
+            || trimmed.starts_with("TRUNCATE")
+        {
+            QueryKind::Ddl
+        } else {
+            QueryKind::Other
+        }
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        matches!(self, QueryKind::Select)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Metadata {
+    pub total_queries: u64,
+    pub total_sessions: u64,
+    pub capture_duration_us: u64,
+}
