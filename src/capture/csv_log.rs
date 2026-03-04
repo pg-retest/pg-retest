@@ -199,29 +199,8 @@ impl CsvLogCapture {
     }
 }
 
-/// Assign transaction IDs to queries within BEGIN/COMMIT|ROLLBACK blocks.
 fn assign_transaction_ids(queries: &mut [Query], next_txn_id: &mut u64) {
-    let mut current_txn: Option<u64> = None;
-
-    for query in queries.iter_mut() {
-        match query.kind {
-            QueryKind::Begin => {
-                let txn_id = *next_txn_id;
-                *next_txn_id += 1;
-                current_txn = Some(txn_id);
-                query.transaction_id = Some(txn_id);
-            }
-            QueryKind::Commit | QueryKind::Rollback => {
-                if let Some(txn_id) = current_txn {
-                    query.transaction_id = Some(txn_id);
-                }
-                current_txn = None;
-            }
-            _ => {
-                query.transaction_id = current_txn;
-            }
-        }
-    }
+    crate::profile::assign_transaction_ids(queries, next_txn_id);
 }
 
 /// Parse PG log message format:
@@ -386,10 +365,7 @@ mod tests {
         let msg = "duration: 9.281 ms  execute stmtcache_15f213b: SELECT u.id, u.name FROM users u WHERE u.email = $1";
         let (dur, sql) = parse_duration_statement(msg).unwrap();
         assert_eq!(dur, 9281);
-        assert_eq!(
-            sql,
-            "SELECT u.id, u.name FROM users u WHERE u.email = $1"
-        );
+        assert_eq!(sql, "SELECT u.id, u.name FROM users u WHERE u.email = $1");
     }
 
     #[test]
@@ -448,10 +424,7 @@ mod tests {
     fn test_inline_parameters_double_digit() {
         // $10 should not be confused with $1 + "0"
         let sql = "SELECT $1, $10";
-        let params = vec![
-            (1, "'a'".to_string()),
-            (10, "'b'".to_string()),
-        ];
+        let params = vec![(1, "'a'".to_string()), (10, "'b'".to_string())];
         let result = inline_parameters(sql, &params);
         assert_eq!(result, "SELECT 'a', 'b'");
     }

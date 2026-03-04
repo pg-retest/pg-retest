@@ -6,6 +6,7 @@ description = "Capture, replay, and compare PostgreSQL workloads"
 
 [dependencies]
 anyhow = "1"
+bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 csv = "1"

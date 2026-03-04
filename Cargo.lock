@@ -669,6 +669,7 @@ name = "pg-retest"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "csv",

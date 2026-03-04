@@ -91,3 +91,29 @@ pub struct Metadata {
     pub total_sessions: u64,
     pub capture_duration_us: u64,
 }
+
+/// Assign transaction IDs to queries within BEGIN/COMMIT|ROLLBACK blocks.
+/// Used by both CSV log capture and proxy capture.
+pub fn assign_transaction_ids(queries: &mut [Query], next_txn_id: &mut u64) {
+    let mut current_txn: Option<u64> = None;
+
+    for query in queries.iter_mut() {
+        match query.kind {
+            QueryKind::Begin => {
+                let txn_id = *next_txn_id;
+                *next_txn_id += 1;
+                current_txn = Some(txn_id);
+                query.transaction_id = Some(txn_id);
+            }
+            QueryKind::Commit | QueryKind::Rollback => {
+                if let Some(txn_id) = current_txn {
+                    query.transaction_id = Some(txn_id);
+                }
+                current_txn = None;
+            }
+            _ => {
+                query.transaction_id = current_txn;
+            }
+        }
+    }
+}
