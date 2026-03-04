@@ -28,6 +28,8 @@ pub struct Query {
     pub start_offset_us: u64,
     pub duration_us: u64,
     pub kind: QueryKind,
+    #[serde(default)]
+    pub transaction_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +39,9 @@ pub enum QueryKind {
     Update,
     Delete,
     Ddl,
+    Begin,
+    Commit,
+    Rollback,
     Other,
 }
 
@@ -57,6 +62,12 @@ impl QueryKind {
             || trimmed.starts_with("TRUNCATE")
         {
             QueryKind::Ddl
+        } else if trimmed.starts_with("BEGIN") || trimmed.starts_with("START TRANSACTION") {
+            QueryKind::Begin
+        } else if trimmed.starts_with("COMMIT") || trimmed.starts_with("END") {
+            QueryKind::Commit
+        } else if trimmed.starts_with("ROLLBACK") || trimmed.starts_with("ABORT") {
+            QueryKind::Rollback
         } else {
             QueryKind::Other
         }
@@ -64,6 +75,13 @@ impl QueryKind {
 
     pub fn is_read_only(&self) -> bool {
         matches!(self, QueryKind::Select)
+    }
+
+    pub fn is_transaction_control(&self) -> bool {
+        matches!(
+            self,
+            QueryKind::Begin | QueryKind::Commit | QueryKind::Rollback
+        )
     }
 }
 

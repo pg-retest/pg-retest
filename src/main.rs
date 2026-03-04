@@ -24,11 +24,21 @@ fn main() -> Result<()> {
 
 fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
     use pg_retest::capture::csv_log::CsvLogCapture;
+    use pg_retest::capture::masking::mask_sql_literals;
     use pg_retest::profile::io;
 
     let capture = CsvLogCapture;
-    let profile =
+    let mut profile =
         capture.capture_from_file(&args.source_log, &args.source_host, &args.pg_version)?;
+
+    if args.mask_values {
+        for session in &mut profile.sessions {
+            for query in &mut session.queries {
+                query.sql = mask_sql_literals(&query.sql);
+            }
+        }
+        println!("Applied PII masking to SQL literals");
+    }
 
     println!(
         "Captured {} queries across {} sessions",
@@ -42,6 +52,7 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
 
 fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     use pg_retest::profile::io;
+    use pg_retest::replay::scaling::{check_write_safety, scale_sessions};
     use pg_retest::replay::{session::run_replay, ReplayMode};
 
     let profile = io::read_profile(&args.workload)?;
@@ -51,14 +62,39 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
         ReplayMode::ReadWrite
     };
 
+    // Scale sessions if requested
+    let replay_profile = if args.scale > 1 {
+        if let Some(warning) = check_write_safety(&profile) {
+            println!("{warning}");
+        }
+        let scaled_sessions = scale_sessions(&profile, args.scale, args.stagger_ms);
+        println!(
+            "Scaled workload: {} original sessions -> {} total ({}x, {}ms stagger)",
+            profile.sessions.len(),
+            scaled_sessions.len(),
+            args.scale,
+            args.stagger_ms
+        );
+        let mut scaled = profile.clone();
+        scaled.sessions = scaled_sessions;
+        scaled.metadata.total_sessions = scaled.sessions.len() as u64;
+        scaled.metadata.total_queries =
+            scaled.sessions.iter().map(|s| s.queries.len() as u64).sum();
+        scaled
+    } else {
+        profile.clone()
+    };
+
     println!(
         "Replaying {} sessions ({} queries) against {}",
-        profile.metadata.total_sessions, profile.metadata.total_queries, args.target
+        replay_profile.metadata.total_sessions, replay_profile.metadata.total_queries, args.target
     );
     println!("Mode: {:?}, Speed: {}x", mode, args.speed);
 
     let rt = tokio::runtime::Runtime::new()?;
-    let results = rt.block_on(run_replay(&profile, &args.target, mode, args.speed))?;
+    let replay_start = std::time::Instant::now();
+    let results = rt.block_on(run_replay(&replay_profile, &args.target, mode, args.speed))?;
+    let elapsed_us = replay_start.elapsed().as_micros() as u64;
 
     let total_replayed: usize = results.iter().map(|r| r.query_results.len()).sum();
     let total_errors: usize = results
@@ -69,6 +105,13 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
 
     println!("Replay complete: {total_replayed} queries replayed, {total_errors} errors");
 
+    // Print scale report if scaled
+    if args.scale > 1 {
+        use pg_retest::compare::capacity::{compute_scale_report, print_scale_report};
+        let scale_report = compute_scale_report(&results, args.scale, elapsed_us);
+        print_scale_report(&scale_report);
+    }
+
     // Save results as MessagePack
     let bytes = rmp_serde::to_vec(&results)?;
     std::fs::write(&args.output, bytes)?;
@@ -78,7 +121,7 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
 }
 
 fn cmd_compare(args: pg_retest::cli::CompareArgs) -> Result<()> {
-    use pg_retest::compare::{compute_comparison, report};
+    use pg_retest::compare::{compute_comparison, evaluate_outcome, report};
     use pg_retest::profile::io;
     use pg_retest::replay::ReplayResults;
 
@@ -95,14 +138,29 @@ fn cmd_compare(args: pg_retest::cli::CompareArgs) -> Result<()> {
         println!("  JSON report written to {}", json_path.display());
     }
 
+    let outcome = evaluate_outcome(&report_data, args.fail_on_regression, args.fail_on_error);
+    println!("  Result: {}", outcome.label());
+
+    let code = outcome.exit_code();
+    if code != 0 {
+        std::process::exit(code);
+    }
+
     Ok(())
 }
 
 fn cmd_inspect(args: pg_retest::cli::InspectArgs) -> Result<()> {
+    use pg_retest::classify::{classify_workload, print_classification};
     use pg_retest::profile::io;
 
     let profile = io::read_profile(&args.path)?;
     let json = serde_json::to_string_pretty(&profile)?;
     println!("{json}");
+
+    if args.classify {
+        let classification = classify_workload(&profile);
+        print_classification(&classification);
+    }
+
     Ok(())
 }

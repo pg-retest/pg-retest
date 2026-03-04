@@ -46,6 +46,10 @@ pub struct CaptureArgs {
     /// PostgreSQL version (for metadata)
     #[arg(long, default_value = "unknown")]
     pub pg_version: String,
+
+    /// Mask string and numeric literals in captured SQL (PII protection)
+    #[arg(long, default_value_t = false)]
+    pub mask_values: bool,
 }
 
 #[derive(clap::Args)]
@@ -69,6 +73,14 @@ pub struct ReplayArgs {
     /// Speed multiplier (e.g., 2.0 = 2x faster)
     #[arg(long, default_value_t = 1.0)]
     pub speed: f64,
+
+    /// Scale factor: duplicate sessions N times for load testing
+    #[arg(long, default_value_t = 1)]
+    pub scale: u32,
+
+    /// Stagger interval between scaled copies (milliseconds)
+    #[arg(long, default_value_t = 0)]
+    pub stagger_ms: u64,
 }
 
 #[derive(clap::Args)]
@@ -88,10 +100,22 @@ pub struct CompareArgs {
     /// Regression threshold percentage (flag queries slower by this %)
     #[arg(long, default_value_t = 20.0)]
     pub threshold: f64,
+
+    /// Exit non-zero if regressions are detected
+    #[arg(long, default_value_t = false)]
+    pub fail_on_regression: bool,
+
+    /// Exit non-zero if query errors occurred
+    #[arg(long, default_value_t = false)]
+    pub fail_on_error: bool,
 }
 
 #[derive(clap::Args)]
 pub struct InspectArgs {
     /// Path to workload profile (.wkl)
     pub path: PathBuf,
+
+    /// Show workload classification breakdown
+    #[arg(long, default_value_t = false)]
+    pub classify: bool,
 }

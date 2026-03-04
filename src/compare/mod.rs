@@ -1,3 +1,4 @@
+pub mod capacity;
 pub mod report;
 
 use serde::{Deserialize, Serialize};
@@ -92,6 +93,46 @@ pub fn compute_comparison(
         replay_p99_latency_us: percentile(&replay_durations, 99),
         regressions,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOutcome {
+    Pass,
+    Regressions,
+    Errors,
+}
+
+impl CompareOutcome {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            CompareOutcome::Pass => 0,
+            CompareOutcome::Regressions => 1,
+            CompareOutcome::Errors => 2,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            CompareOutcome::Pass => "PASS",
+            CompareOutcome::Regressions => "FAIL (regressions detected)",
+            CompareOutcome::Errors => "FAIL (query errors detected)",
+        }
+    }
+}
+
+pub fn evaluate_outcome(
+    report: &ComparisonReport,
+    fail_on_regression: bool,
+    fail_on_error: bool,
+) -> CompareOutcome {
+    // Errors take priority over regressions
+    if fail_on_error && report.total_errors > 0 {
+        return CompareOutcome::Errors;
+    }
+    if fail_on_regression && !report.regressions.is_empty() {
+        return CompareOutcome::Regressions;
+    }
+    CompareOutcome::Pass
 }
 
 fn avg(values: &[u64]) -> u64 {

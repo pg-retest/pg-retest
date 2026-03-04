@@ -4,6 +4,19 @@ Capture, replay, and compare PostgreSQL workloads.
 
 pg-retest captures SQL workload from PostgreSQL server logs, replays it against a target database, and produces a side-by-side performance comparison report. Use it to validate configuration changes, server migrations, and capacity planning.
 
+## Features
+
+- **Capture** workload from PG CSV logs with transaction boundary tracking
+- **PII masking** — strip string and numeric literals from captured SQL
+- **Replay** against any PostgreSQL target with per-connection parallelism
+- **Transaction-aware replay** — auto-rollback on failure, skip remaining queries in failed transaction
+- **Read-only mode** — strip DML for safe replay against production replicas
+- **Speed control** — compress or stretch timing between queries
+- **Scaled benchmark** — duplicate sessions N times with staggered offsets for load testing
+- **Workload classification** — categorize as Analytical, Transactional, Mixed, or Bulk
+- **Comparison reports** — per-query latency regression detection with exit codes for CI
+- **Capacity planning** — throughput QPS, latency percentiles, error rates at scale
+
 ## Quick Start
 
 ```bash
@@ -115,6 +128,31 @@ Logging with `log_min_duration_statement = 0` has minimal overhead on most workl
 - Capturing during off-peak windows
 - Using `log_statement = 'none'` and relying on `auto_explain` instead
 
+## Capture Options
+
+```bash
+pg-retest capture \
+  --source-log /path/to/postgresql.csv \
+  --output workload.wkl \
+  --source-host prod-db-01 \
+  --pg-version 16.2 \
+  --mask-values              # Strip PII from SQL literals
+```
+
+### PII Masking
+
+The `--mask-values` flag replaces string literals with `$S` and numeric literals with `$N`:
+
+```
+-- Original:
+SELECT * FROM users WHERE email = 'alice@corp.com' AND id = 42
+
+-- Masked:
+SELECT * FROM users WHERE email = $S AND id = $N
+```
+
+Masking handles SQL edge cases: escaped quotes (`''`), dollar-quoted strings (`$$...$$`), and preserves numbers in identifiers (`table3`, `col1`).
+
 ## Replay Modes
 
 ### Read-Write (default)
@@ -127,7 +165,7 @@ pg-retest replay --workload workload.wkl --target "host=localhost dbname=mydb us
 
 ### Read-Only
 
-Strips all DML (INSERT, UPDATE, DELETE) and DDL (CREATE, ALTER, DROP), replaying only SELECT queries. Safe to run against production data.
+Strips all DML (INSERT, UPDATE, DELETE), DDL (CREATE, ALTER, DROP), and transaction control (BEGIN, COMMIT, ROLLBACK), replaying only SELECT queries. Safe to run against production data.
 
 ```bash
 pg-retest replay --workload workload.wkl --target "..." --read-only
@@ -145,6 +183,25 @@ pg-retest replay --workload workload.wkl --target "..." --speed 2.0
 pg-retest replay --workload workload.wkl --target "..." --speed 0.5
 ```
 
+### Scaled Benchmark
+
+Duplicate sessions N times for load testing:
+
+```bash
+# 4x the original sessions, staggered 500ms apart
+pg-retest replay --workload workload.wkl --target "..." --scale 4 --stagger-ms 500
+```
+
+This produces a capacity planning report with throughput (queries/sec), latency percentiles, and error rates.
+
+## Transaction Support
+
+pg-retest tracks transaction boundaries (BEGIN/COMMIT/ROLLBACK) during capture and provides transaction-aware replay:
+
+- Queries within a transaction share a `transaction_id`
+- If a query inside a transaction fails, the replay engine automatically issues a ROLLBACK and skips remaining queries in that transaction
+- COMMIT for a failed transaction is converted to a no-op
+
 ## Comparison Report
 
 The compare command produces a terminal summary and optional JSON report:
@@ -154,6 +211,18 @@ pg-retest compare --source workload.wkl --replay results.wkl --json report.json 
 ```
 
 - `--threshold`: Flag queries that are slower by this percentage (default: 20%)
+- `--fail-on-regression`: Exit with code 1 if regressions are detected
+- `--fail-on-error`: Exit with code 2 if query errors occurred
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | PASS — all checks passed |
+| 1 | FAIL — regressions detected (with `--fail-on-regression`) |
+| 2 | FAIL — query errors detected (with `--fail-on-error`) |
+
+When both flags are set, errors take priority over regressions.
 
 ### Report Metrics
 
@@ -164,13 +233,32 @@ pg-retest compare --source workload.wkl --replay results.wkl --json report.json 
 | Errors | Queries that failed during replay |
 | Regressions | Individual queries exceeding the threshold |
 
+## Workload Classification
+
+Classify captured workloads to understand their characteristics:
+
+```bash
+pg-retest inspect workload.wkl --classify
+```
+
+| Class | Criteria |
+|-------|---------|
+| **Analytical** | >80% reads, avg latency >10ms (OLAP pattern) |
+| **Transactional** | >20% writes, avg latency <5ms, >2 transactions (OLTP pattern) |
+| **Bulk** | >80% writes, <=2 transactions (data loading) |
+| **Mixed** | Everything else |
+
+Classification outputs per-session breakdown with read/write percentages, average latency, and transaction count.
+
 ## Workload Profile Format
 
-Profiles are stored as MessagePack binary files (`.wkl`). Use `inspect` to view as JSON:
+Profiles are stored as MessagePack binary files (`.wkl`, v2 format). Use `inspect` to view as JSON:
 
 ```bash
 pg-retest inspect workload.wkl | jq .
 ```
+
+v2 profiles include transaction IDs on queries. v1 profiles (without transaction support) are fully backward compatible.
 
 ## Building
 
@@ -192,4 +280,10 @@ cargo test --test compare_test test_comparison_regressions
 
 # Run with verbose logging
 RUST_LOG=debug pg-retest capture --source-log ...
+
+# Lint
+cargo clippy
+
+# Format
+cargo fmt
 ```

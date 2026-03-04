@@ -56,18 +56,22 @@ The project is both a library (`src/lib.rs`) and binary (`src/main.rs`). Integra
 
 Key modules:
 - `capture::csv_log` — PG CSV log parser (pluggable backend via `CaptureSource` pattern)
-- `profile` — Core data types (`WorkloadProfile`, `Session`, `Query`) + MessagePack I/O
-- `replay::session` — Async per-session replay engine (Tokio + tokio-postgres)
-- `compare` — Performance comparison logic + terminal/JSON reporting
+- `capture::masking` — SQL literal masking for PII protection (strings→`$S`, numbers→`$N`)
+- `profile` — Core data types (`WorkloadProfile`, `Session`, `Query`) + MessagePack I/O (v2 format with transaction support)
+- `replay::session` — Async per-session replay engine (Tokio + tokio-postgres), transaction-aware (auto-rollback on failure)
+- `replay::scaling` — Session duplication with staggered offsets for load testing
+- `classify` — Workload classification (Analytical/Transactional/Mixed/Bulk) based on read/write ratio, latency, transaction count
+- `compare` — Performance comparison logic + terminal/JSON reporting + exit code evaluation
+- `compare::capacity` — Scaled replay reporting (throughput QPS, latency percentiles, error rate)
 - `cli` — Clap derive-based CLI argument structs
 
 ## Milestone Status
 
-- **M1: Capture & Replay** — Complete. CSV log capture, async replay, comparison reports.
-- **M2: Scaled Benchmark** — Not started. Workload classification + scaled replay.
-- **M3: CI/CD Integration** — Not started. Automation + pass/fail thresholds.
-- **M4: Cross-Database Capture** — Not started. Oracle/MySQL/MariaDB capture + transform.
-- **M5: AI-Assisted Tuning** — Not started.
+- **M1: Capture & Replay** — Complete (with gap closure). CSV log capture, transaction boundaries, PII masking, async replay with transaction-aware error handling, comparison reports with exit codes. 1725 LOC, 59 tests.
+- **M2: Scaled Benchmark** — Complete. Workload classification (Analytical/Transactional/Mixed/Bulk), session scaling with stagger, capacity planning reports.
+- **M3: CI/CD Integration** — Design complete (`docs/plans/2026-03-04-m3-cicd-design.md`). TOML config, Docker provisioner, JUnit XML output, pipeline orchestrator.
+- **M4: Cross-Database Capture** — Design complete (`docs/plans/2026-03-04-m4-mysql-capture-design.md`). MySQL slow/general log parsers, SQL transform pipeline.
+- **M5: AI-Assisted Tuning** — Design complete (`docs/plans/2026-03-04-m5-ai-tuning-design.md`). Claude API integration, tuning loop, A/B variants.
 
 ## Gotchas
 
@@ -75,7 +79,11 @@ Key modules:
 - PG CSV log timestamps (`2024-03-08 10:00:00.100 UTC`) are not RFC 3339 — the parser has a fallback via `NaiveDateTime`.
 - Capture backends are pluggable: implement parsing in `src/capture/`, the profile format and replay engine don't change.
 - Always run `cargo fmt` after writing code — the formatter's output may differ from hand-written style.
-- `.wkl` files are MessagePack binary. Use `pg-retest inspect file.wkl` to view as JSON.
+- `.wkl` files are MessagePack binary (v2 format). Use `pg-retest inspect file.wkl` to view as JSON.
+- Profile format v2 adds `transaction_id: Option<u64>` to `Query`. v1 files deserialize cleanly via `#[serde(default)]`.
+- `QueryKind` now includes `Begin`, `Commit`, `Rollback` variants — existing tests that asserted `BEGIN` → `Other` were updated to expect `Begin`.
+- PII masking (`--mask-values`) uses a hand-written character-level state machine, not regex. This handles SQL edge cases (escaped quotes, dollar-quoting, identifiers with numbers) correctly.
+- Scaling write workloads (`--scale N` with DML) prints a safety warning — scaled writes execute multiple times and change data state.
 
 ## Conventions
 

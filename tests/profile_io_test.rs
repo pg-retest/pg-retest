@@ -22,12 +22,14 @@ fn test_profile_roundtrip_messagepack() {
                         start_offset_us: 0,
                         duration_us: 500,
                         kind: QueryKind::Select,
+                        transaction_id: None,
                     },
                     Query {
                         sql: "UPDATE users SET name = 'test' WHERE id = 1".into(),
                         start_offset_us: 1000,
                         duration_us: 1200,
                         kind: QueryKind::Update,
+                        transaction_id: None,
                     },
                 ],
             },
@@ -40,6 +42,7 @@ fn test_profile_roundtrip_messagepack() {
                     start_offset_us: 200,
                     duration_us: 3000,
                     kind: QueryKind::Select,
+                    transaction_id: None,
                 }],
             },
         ],
@@ -101,6 +104,132 @@ fn test_query_kind_classification() {
     );
     assert_eq!(QueryKind::from_sql("DROP TABLE foo"), QueryKind::Ddl);
     assert_eq!(QueryKind::from_sql("VACUUM users"), QueryKind::Other);
-    assert_eq!(QueryKind::from_sql("BEGIN"), QueryKind::Other);
-    assert_eq!(QueryKind::from_sql("COMMIT"), QueryKind::Other);
+    assert_eq!(QueryKind::from_sql("BEGIN"), QueryKind::Begin);
+    assert_eq!(QueryKind::from_sql("COMMIT"), QueryKind::Commit);
+}
+
+// --- Transaction-related classification tests ---
+
+#[test]
+fn test_query_kind_transaction_control() {
+    assert_eq!(QueryKind::from_sql("BEGIN"), QueryKind::Begin);
+    assert_eq!(QueryKind::from_sql("START TRANSACTION"), QueryKind::Begin);
+    assert_eq!(QueryKind::from_sql("COMMIT"), QueryKind::Commit);
+    assert_eq!(QueryKind::from_sql("END"), QueryKind::Commit);
+    assert_eq!(QueryKind::from_sql("ROLLBACK"), QueryKind::Rollback);
+    assert_eq!(QueryKind::from_sql("ABORT"), QueryKind::Rollback);
+}
+
+#[test]
+fn test_is_transaction_control() {
+    assert!(QueryKind::Begin.is_transaction_control());
+    assert!(QueryKind::Commit.is_transaction_control());
+    assert!(QueryKind::Rollback.is_transaction_control());
+    assert!(!QueryKind::Select.is_transaction_control());
+    assert!(!QueryKind::Insert.is_transaction_control());
+    assert!(!QueryKind::Other.is_transaction_control());
+}
+
+#[test]
+fn test_transaction_control_not_read_only() {
+    assert!(!QueryKind::Begin.is_read_only());
+    assert!(!QueryKind::Commit.is_read_only());
+    assert!(!QueryKind::Rollback.is_read_only());
+}
+
+#[test]
+fn test_profile_roundtrip_with_transaction_id() {
+    let profile = WorkloadProfile {
+        version: 2,
+        captured_at: Utc::now(),
+        source_host: "localhost".into(),
+        pg_version: "16.2".into(),
+        capture_method: "csv_log".into(),
+        sessions: vec![Session {
+            id: 1,
+            user: "app".into(),
+            database: "db".into(),
+            queries: vec![
+                Query {
+                    sql: "BEGIN".into(),
+                    start_offset_us: 0,
+                    duration_us: 10,
+                    kind: QueryKind::Begin,
+                    transaction_id: Some(1),
+                },
+                Query {
+                    sql: "UPDATE t SET x=1".into(),
+                    start_offset_us: 100,
+                    duration_us: 500,
+                    kind: QueryKind::Update,
+                    transaction_id: Some(1),
+                },
+                Query {
+                    sql: "COMMIT".into(),
+                    start_offset_us: 200,
+                    duration_us: 20,
+                    kind: QueryKind::Commit,
+                    transaction_id: Some(1),
+                },
+                Query {
+                    sql: "SELECT 1".into(),
+                    start_offset_us: 300,
+                    duration_us: 100,
+                    kind: QueryKind::Select,
+                    transaction_id: None,
+                },
+            ],
+        }],
+        metadata: Metadata {
+            total_queries: 4,
+            total_sessions: 1,
+            capture_duration_us: 300,
+        },
+    };
+
+    let file = NamedTempFile::new().unwrap();
+    io::write_profile(file.path(), &profile).unwrap();
+    let loaded = io::read_profile(file.path()).unwrap();
+
+    assert_eq!(loaded.version, 2);
+    assert_eq!(loaded.sessions[0].queries[0].transaction_id, Some(1));
+    assert_eq!(loaded.sessions[0].queries[1].transaction_id, Some(1));
+    assert_eq!(loaded.sessions[0].queries[2].transaction_id, Some(1));
+    assert_eq!(loaded.sessions[0].queries[3].transaction_id, None);
+}
+
+#[test]
+fn test_v1_profile_deserializes_with_none_transaction_id() {
+    // v1 profile (no transaction_id) should deserialize with None thanks to #[serde(default)]
+    let profile = WorkloadProfile {
+        version: 1,
+        captured_at: Utc::now(),
+        source_host: "old-host".into(),
+        pg_version: "15.0".into(),
+        capture_method: "csv_log".into(),
+        sessions: vec![Session {
+            id: 1,
+            user: "app".into(),
+            database: "db".into(),
+            queries: vec![Query {
+                sql: "SELECT 1".into(),
+                start_offset_us: 0,
+                duration_us: 100,
+                kind: QueryKind::Select,
+                transaction_id: None, // simulates a v1 profile
+            }],
+        }],
+        metadata: Metadata {
+            total_queries: 1,
+            total_sessions: 1,
+            capture_duration_us: 100,
+        },
+    };
+
+    let file = NamedTempFile::new().unwrap();
+    io::write_profile(file.path(), &profile).unwrap();
+    let loaded = io::read_profile(file.path()).unwrap();
+
+    assert_eq!(loaded.version, 1);
+    assert_eq!(loaded.sessions[0].queries[0].transaction_id, None);
 }

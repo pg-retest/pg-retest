@@ -5,7 +5,7 @@ use tokio::time::{sleep_until, Instant as TokioInstant};
 use tokio_postgres::NoTls;
 use tracing::{debug, warn};
 
-use crate::profile::Session;
+use crate::profile::{QueryKind, Session};
 use crate::replay::{QueryResult, ReplayMode, ReplayResults};
 
 pub async fn replay_session(
@@ -25,10 +25,41 @@ pub async fn replay_session(
     });
 
     let mut query_results = Vec::new();
+    let mut failed_txn_id: Option<u64> = None;
 
     for query in &session.queries {
         if !mode.should_replay(query) {
             continue;
+        }
+
+        // If we're inside a failed transaction, handle specially
+        if let Some(failed_id) = failed_txn_id {
+            if query.transaction_id == Some(failed_id) {
+                // COMMIT/ROLLBACK ends the failed transaction
+                if query.kind == QueryKind::Commit || query.kind == QueryKind::Rollback {
+                    failed_txn_id = None;
+                    query_results.push(QueryResult {
+                        sql: query.sql.clone(),
+                        original_duration_us: query.duration_us,
+                        replay_duration_us: 0,
+                        success: false,
+                        error: Some("skipped: transaction already rolled back".into()),
+                    });
+                } else {
+                    // Skip remaining queries in failed transaction
+                    query_results.push(QueryResult {
+                        sql: query.sql.clone(),
+                        original_duration_us: query.duration_us,
+                        replay_duration_us: 0,
+                        success: false,
+                        error: Some("skipped: transaction failed".into()),
+                    });
+                }
+                continue;
+            } else {
+                // Different transaction or no transaction — clear failed state
+                failed_txn_id = None;
+            }
         }
 
         // Wait until the scaled target time
@@ -44,6 +75,19 @@ pub async fn replay_session(
             Ok(_) => (true, None),
             Err(e) => {
                 debug!("Query error in session {}: {e}", session.id);
+
+                // If this query is inside a transaction, issue ROLLBACK and mark txn as failed
+                if let Some(txn_id) = query.transaction_id {
+                    if !query.kind.is_transaction_control() {
+                        debug!(
+                            "Rolling back failed transaction {} in session {}",
+                            txn_id, session.id
+                        );
+                        let _ = client.simple_query("ROLLBACK").await;
+                        failed_txn_id = Some(txn_id);
+                    }
+                }
+
                 (false, Some(e.to_string()))
             }
         };

@@ -59,10 +59,21 @@ impl CsvLogCapture {
             };
 
             // Parse "duration: X.XXX ms  statement: SQL..."
-            let (duration_us, sql) = match parse_duration_statement(message) {
+            // or   "duration: X.XXX ms  execute <name>: SQL..."
+            let (duration_us, mut sql) = match parse_duration_statement(message) {
                 Some(parsed) => parsed,
                 None => continue,
             };
+
+            // For prepared statements, inline parameter values from the detail field
+            // Detail field (14) contains: "Parameters: $1 = 'value', $2 = 42, ..."
+            if sql.contains('$') {
+                if let Some(detail) = record.get(14) {
+                    if let Some(params) = parse_parameters(detail) {
+                        sql = inline_parameters(&sql, &params);
+                    }
+                }
+            }
 
             let log_time = record
                 .get(0)
@@ -109,6 +120,7 @@ impl CsvLogCapture {
         let mut sessions = Vec::new();
         let mut total_queries: u64 = 0;
         let mut session_counter: u64 = 0;
+        let mut next_txn_id: u64 = 1;
         let mut global_min_time: Option<DateTime<Utc>> = None;
         let mut global_max_time: Option<DateTime<Utc>> = None;
 
@@ -136,7 +148,7 @@ impl CsvLogCapture {
                 }
             }
 
-            let queries: Vec<Query> = entries
+            let mut queries: Vec<Query> = entries
                 .iter()
                 .map(|e| {
                     let offset = (e.log_time - first_time).num_microseconds().unwrap_or(0) as u64;
@@ -145,9 +157,13 @@ impl CsvLogCapture {
                         start_offset_us: offset,
                         duration_us: e.duration_us,
                         kind: QueryKind::from_sql(&e.sql),
+                        transaction_id: None,
                     }
                 })
                 .collect();
+
+            // Assign transaction IDs to queries within BEGIN/COMMIT|ROLLBACK blocks
+            assign_transaction_ids(&mut queries, &mut next_txn_id);
 
             total_queries += queries.len() as u64;
             session_counter += 1;
@@ -168,7 +184,7 @@ impl CsvLogCapture {
         };
 
         Ok(WorkloadProfile {
-            version: 1,
+            version: 2,
             captured_at: Utc::now(),
             source_host: source_host.to_string(),
             pg_version: pg_version.to_string(),
@@ -183,7 +199,38 @@ impl CsvLogCapture {
     }
 }
 
-/// Parse PG log message format: "duration: X.XXX ms  statement: SQL..."
+/// Assign transaction IDs to queries within BEGIN/COMMIT|ROLLBACK blocks.
+fn assign_transaction_ids(queries: &mut [Query], next_txn_id: &mut u64) {
+    let mut current_txn: Option<u64> = None;
+
+    for query in queries.iter_mut() {
+        match query.kind {
+            QueryKind::Begin => {
+                let txn_id = *next_txn_id;
+                *next_txn_id += 1;
+                current_txn = Some(txn_id);
+                query.transaction_id = Some(txn_id);
+            }
+            QueryKind::Commit | QueryKind::Rollback => {
+                if let Some(txn_id) = current_txn {
+                    query.transaction_id = Some(txn_id);
+                }
+                current_txn = None;
+            }
+            _ => {
+                query.transaction_id = current_txn;
+            }
+        }
+    }
+}
+
+/// Parse PG log message format:
+/// - "duration: X.XXX ms  statement: SQL..."
+/// - "duration: X.XXX ms  bind <name>: SQL..."     (prepared statements)
+/// - "duration: X.XXX ms  execute <name>: SQL..."   (prepared statements)
+/// - "duration: X.XXX ms  parse <name>: SQL..."     (prepared statements)
+///
+/// For bind/execute/parse, the SQL follows "<name>: " after the keyword.
 fn parse_duration_statement(message: &str) -> Option<(u64, String)> {
     let message = message.trim();
 
@@ -191,21 +238,121 @@ fn parse_duration_statement(message: &str) -> Option<(u64, String)> {
         return None;
     }
 
-    let stmt_marker = "statement: ";
-    let stmt_pos = message.find(stmt_marker)?;
-    let sql = message[stmt_pos + stmt_marker.len()..].to_string();
-
+    // Parse duration value first (common to all formats)
     let dur_start = "duration: ".len();
     let ms_pos = message.find(" ms")?;
     let dur_str = &message[dur_start..ms_pos];
     let dur_ms: f64 = dur_str.trim().parse().ok()?;
     let dur_us = (dur_ms * 1000.0).round() as u64;
 
+    // Find the SQL portion after "  " (double space) following "ms"
+    let after_ms = &message[ms_pos + " ms".len()..];
+    let content = after_ms.trim_start();
+
+    // Try each known prefix: statement, execute, bind, parse
+    // We only capture "statement" (simple query) and "execute" (prepared statement execution).
+    // We skip "bind" and "parse" to avoid duplicating prepared-statement queries — the
+    // execute entry carries the actual execution duration which is what we want for replay.
+    let sql = if let Some(rest) = content.strip_prefix("statement: ") {
+        rest.to_string()
+    } else if let Some(rest) = strip_named_prefix(content, "execute") {
+        rest
+    } else {
+        return None;
+    };
+
     if sql.is_empty() {
         return None;
     }
 
     Some((dur_us, sql))
+}
+
+/// Strip a named prepared-statement prefix like "execute <name>: SQL" or "bind <name>: SQL".
+/// Returns the SQL portion after "<name>: ", or None if the format doesn't match.
+fn strip_named_prefix(content: &str, keyword: &str) -> Option<String> {
+    let rest = content.strip_prefix(keyword)?.trim_start();
+    // The format is "<name>: SQL..." — find the first ": " after the name
+    let colon_pos = rest.find(": ")?;
+    let sql = &rest[colon_pos + ": ".len()..];
+    Some(sql.to_string())
+}
+
+/// Parse PG detail field: "Parameters: $1 = 'value', $2 = 42, $3 = NULL"
+/// Returns a vec of (param_number, value_string) pairs.
+fn parse_parameters(detail: &str) -> Option<Vec<(usize, String)>> {
+    let detail = detail.trim();
+    let rest = detail.strip_prefix("Parameters:")?;
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut params = Vec::new();
+    // Split on ", $" but we need to be careful with quoted strings containing commas.
+    // Strategy: walk character by character to handle quoting.
+    let mut entries = Vec::new();
+    let mut current = String::new();
+    let mut in_quote = false;
+    let chars: Vec<char> = rest.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\'' && !in_quote {
+            in_quote = true;
+            current.push(chars[i]);
+        } else if chars[i] == '\'' && in_quote {
+            // Check for escaped quote ''
+            if i + 1 < chars.len() && chars[i + 1] == '\'' {
+                current.push('\'');
+                current.push('\'');
+                i += 2;
+                continue;
+            }
+            in_quote = false;
+            current.push(chars[i]);
+        } else if chars[i] == ',' && !in_quote {
+            entries.push(current.trim().to_string());
+            current = String::new();
+        } else {
+            current.push(chars[i]);
+        }
+        i += 1;
+    }
+    if !current.trim().is_empty() {
+        entries.push(current.trim().to_string());
+    }
+
+    for entry in &entries {
+        // Each entry: "$1 = 'value'" or "$2 = 42" or "$3 = NULL"
+        let entry = entry.trim();
+        let entry = entry.strip_prefix('$').unwrap_or(entry);
+        let eq_pos = match entry.find(" = ") {
+            Some(p) => p,
+            None => continue,
+        };
+        let num: usize = match entry[..eq_pos].trim().parse() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let value = entry[eq_pos + " = ".len()..].trim().to_string();
+        params.push((num, value));
+    }
+
+    Some(params)
+}
+
+/// Replace $1, $2, ... placeholders in SQL with actual parameter values.
+fn inline_parameters(sql: &str, params: &[(usize, String)]) -> String {
+    let mut result = sql.to_string();
+    // Replace in reverse order ($10 before $1) to avoid partial matches
+    let mut sorted_params: Vec<&(usize, String)> = params.iter().collect();
+    sorted_params.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (num, value) in sorted_params {
+        let placeholder = format!("${num}");
+        result = result.replace(&placeholder, value);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -232,5 +379,80 @@ mod tests {
     fn test_parse_duration_statement_rejects_non_duration() {
         assert!(parse_duration_statement("connection authorized: user=app").is_none());
         assert!(parse_duration_statement("").is_none());
+    }
+
+    #[test]
+    fn test_parse_duration_execute_prepared() {
+        let msg = "duration: 9.281 ms  execute stmtcache_15f213b: SELECT u.id, u.name FROM users u WHERE u.email = $1";
+        let (dur, sql) = parse_duration_statement(msg).unwrap();
+        assert_eq!(dur, 9281);
+        assert_eq!(
+            sql,
+            "SELECT u.id, u.name FROM users u WHERE u.email = $1"
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_bind_skipped() {
+        // bind entries are skipped to avoid duplicating prepared-statement queries
+        let msg = "duration: 2.072 ms  bind stmtcache_abc123: SELECT * FROM orders WHERE id = $1";
+        assert!(parse_duration_statement(msg).is_none());
+    }
+
+    #[test]
+    fn test_parse_duration_parse_skipped() {
+        // parse entries are skipped — only execute carries the execution duration
+        let msg = "duration: 0.500 ms  parse stmtcache_def456: INSERT INTO logs (msg) VALUES ($1)";
+        assert!(parse_duration_statement(msg).is_none());
+    }
+
+    #[test]
+    fn test_parse_duration_unnamed_prepared() {
+        // Unnamed prepared statements use empty string as name
+        let msg = "duration: 1.000 ms  execute <unnamed>: SELECT 1";
+        let (dur, sql) = parse_duration_statement(msg).unwrap();
+        assert_eq!(dur, 1000);
+        assert_eq!(sql, "SELECT 1");
+    }
+
+    #[test]
+    fn test_parse_parameters_basic() {
+        let params =
+            parse_parameters("Parameters: $1 = 'sales_demo_app', $2 = 42, $3 = NULL").unwrap();
+        assert_eq!(params.len(), 3);
+        assert_eq!(params[0], (1, "'sales_demo_app'".to_string()));
+        assert_eq!(params[1], (2, "42".to_string()));
+        assert_eq!(params[2], (3, "NULL".to_string()));
+    }
+
+    #[test]
+    fn test_parse_parameters_with_embedded_comma() {
+        let params = parse_parameters("Parameters: $1 = 'hello, world', $2 = 5").unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0], (1, "'hello, world'".to_string()));
+        assert_eq!(params[1], (2, "5".to_string()));
+    }
+
+    #[test]
+    fn test_inline_parameters() {
+        let sql = "SELECT * FROM users WHERE email = $1 AND id = $2";
+        let params = vec![(1, "'alice@corp.com'".to_string()), (2, "42".to_string())];
+        let result = inline_parameters(sql, &params);
+        assert_eq!(
+            result,
+            "SELECT * FROM users WHERE email = 'alice@corp.com' AND id = 42"
+        );
+    }
+
+    #[test]
+    fn test_inline_parameters_double_digit() {
+        // $10 should not be confused with $1 + "0"
+        let sql = "SELECT $1, $10";
+        let params = vec![
+            (1, "'a'".to_string()),
+            (10, "'b'".to_string()),
+        ];
+        let result = inline_parameters(sql, &params);
+        assert_eq!(result, "SELECT 'a', 'b'");
     }
 }
