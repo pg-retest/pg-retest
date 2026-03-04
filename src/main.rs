@@ -78,8 +78,25 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_compare(_args: pg_retest::cli::CompareArgs) -> Result<()> {
-    anyhow::bail!("Compare not yet implemented")
+fn cmd_compare(args: pg_retest::cli::CompareArgs) -> Result<()> {
+    use pg_retest::compare::{compute_comparison, report};
+    use pg_retest::profile::io;
+    use pg_retest::replay::ReplayResults;
+
+    let source = io::read_profile(&args.source)?;
+
+    let replay_bytes = std::fs::read(&args.replay)?;
+    let results: Vec<ReplayResults> = rmp_serde::from_slice(&replay_bytes)?;
+
+    let report_data = compute_comparison(&source, &results, args.threshold);
+    report::print_terminal_report(&report_data);
+
+    if let Some(json_path) = &args.json {
+        report::write_json_report(json_path, &report_data)?;
+        println!("  JSON report written to {}", json_path.display());
+    }
+
+    Ok(())
 }
 
 fn cmd_inspect(args: pg_retest::cli::InspectArgs) -> Result<()> {
