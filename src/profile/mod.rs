@@ -66,6 +66,9 @@ impl QueryKind {
             QueryKind::Begin
         } else if trimmed.starts_with("COMMIT") || trimmed.starts_with("END") {
             QueryKind::Commit
+        } else if trimmed.starts_with("ROLLBACK TO") {
+            // ROLLBACK TO SAVEPOINT stays inside the transaction — not a real rollback
+            QueryKind::Other
         } else if trimmed.starts_with("ROLLBACK") || trimmed.starts_with("ABORT") {
             QueryKind::Rollback
         } else {

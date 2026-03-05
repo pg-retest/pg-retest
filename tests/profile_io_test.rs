@@ -233,3 +233,91 @@ fn test_v1_profile_deserializes_with_none_transaction_id() {
     assert_eq!(loaded.version, 1);
     assert_eq!(loaded.sessions[0].queries[0].transaction_id, None);
 }
+
+#[test]
+fn test_rollback_to_savepoint_not_classified_as_rollback() {
+    // ROLLBACK TO SAVEPOINT should be Other, not Rollback
+    assert_eq!(QueryKind::from_sql("ROLLBACK TO sp1"), QueryKind::Other);
+    assert_eq!(
+        QueryKind::from_sql("ROLLBACK TO SAVEPOINT sp1"),
+        QueryKind::Other
+    );
+    assert_eq!(
+        QueryKind::from_sql("  rollback to savepoint my_sp"),
+        QueryKind::Other
+    );
+    // Plain ROLLBACK should still be Rollback
+    assert_eq!(QueryKind::from_sql("ROLLBACK"), QueryKind::Rollback);
+}
+
+#[test]
+fn test_transaction_ids_preserved_through_savepoint_rollback() {
+    use pg_retest::profile::assign_transaction_ids;
+
+    let mut queries = vec![
+        Query {
+            sql: "BEGIN".into(),
+            start_offset_us: 0,
+            duration_us: 10,
+            kind: QueryKind::Begin,
+            transaction_id: None,
+        },
+        Query {
+            sql: "INSERT INTO t VALUES (1)".into(),
+            start_offset_us: 100,
+            duration_us: 50,
+            kind: QueryKind::Insert,
+            transaction_id: None,
+        },
+        Query {
+            sql: "SAVEPOINT sp1".into(),
+            start_offset_us: 200,
+            duration_us: 10,
+            kind: QueryKind::Other,
+            transaction_id: None,
+        },
+        Query {
+            sql: "INSERT INTO t VALUES (2)".into(),
+            start_offset_us: 300,
+            duration_us: 50,
+            kind: QueryKind::Insert,
+            transaction_id: None,
+        },
+        Query {
+            sql: "ROLLBACK TO sp1".into(),
+            start_offset_us: 400,
+            duration_us: 10,
+            kind: QueryKind::Other, // NOT Rollback
+            transaction_id: None,
+        },
+        Query {
+            sql: "INSERT INTO t VALUES (3)".into(),
+            start_offset_us: 500,
+            duration_us: 50,
+            kind: QueryKind::Insert,
+            transaction_id: None,
+        },
+        Query {
+            sql: "COMMIT".into(),
+            start_offset_us: 600,
+            duration_us: 10,
+            kind: QueryKind::Commit,
+            transaction_id: None,
+        },
+    ];
+
+    let mut next_id = 1;
+    assign_transaction_ids(&mut queries, &mut next_id);
+
+    // All queries should be in transaction 1
+    for (i, q) in queries.iter().enumerate() {
+        assert_eq!(
+            q.transaction_id,
+            Some(1),
+            "Query {} ({}) should have transaction_id=1",
+            i,
+            q.sql
+        );
+    }
+    assert_eq!(next_id, 2);
+}

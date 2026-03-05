@@ -59,7 +59,19 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         }
         None => {
             info!("Press Ctrl+C to stop and save captured workload");
-            tokio::signal::ctrl_c().await?;
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = signal(SignalKind::terminate())?;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {},
+                    _ = sigterm.recv() => {},
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await?;
+            }
             info!("Shutdown signal received...");
         }
     }
