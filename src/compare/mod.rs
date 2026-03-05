@@ -1,4 +1,5 @@
 pub mod capacity;
+pub mod junit;
 pub mod report;
 pub mod threshold;
 
