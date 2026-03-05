@@ -2,6 +2,7 @@ pub mod capture;
 pub mod classify;
 pub mod cli;
 pub mod compare;
+pub mod config;
 pub mod profile;
 pub mod proxy;
 pub mod replay;
