@@ -41,6 +41,10 @@ pub struct CaptureArgs {
     #[arg(long)]
     pub source_log: PathBuf,
 
+    /// Source log type: pg-csv (default), mysql-slow
+    #[arg(long, default_value = "pg-csv")]
+    pub source_type: String,
+
     /// Output workload profile path (.wkl)
     #[arg(short, long, default_value = "workload.wkl")]
     pub output: PathBuf,

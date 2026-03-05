@@ -27,11 +27,20 @@ fn main() -> Result<()> {
 fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
     use pg_retest::capture::csv_log::CsvLogCapture;
     use pg_retest::capture::masking::mask_sql_literals;
+    use pg_retest::capture::mysql_slow::MysqlSlowLogCapture;
     use pg_retest::profile::io;
 
-    let capture = CsvLogCapture;
-    let mut profile =
-        capture.capture_from_file(&args.source_log, &args.source_host, &args.pg_version)?;
+    let mut profile = match args.source_type.as_str() {
+        "pg-csv" => {
+            let capture = CsvLogCapture;
+            capture.capture_from_file(&args.source_log, &args.source_host, &args.pg_version)?
+        }
+        "mysql-slow" => {
+            let capture = MysqlSlowLogCapture;
+            capture.capture_from_file(&args.source_log, &args.source_host, true)?
+        }
+        other => anyhow::bail!("Unknown source type: {other}. Supported: pg-csv, mysql-slow"),
+    };
 
     if args.mask_values {
         for session in &mut profile.sessions {
