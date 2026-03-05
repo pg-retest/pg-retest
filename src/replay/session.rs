@@ -62,10 +62,12 @@ pub async fn replay_session(
             }
         }
 
-        // Wait until the scaled target time
-        let target_offset =
-            std::time::Duration::from_micros((query.start_offset_us as f64 / speed) as u64);
-        sleep_until(replay_start + target_offset).await;
+        // Wait until the scaled target time (speed=0 means max speed, no delays)
+        if speed > 0.0 {
+            let target_offset =
+                std::time::Duration::from_micros((query.start_offset_us as f64 / speed) as u64);
+            sleep_until(replay_start + target_offset).await;
+        }
 
         let start = Instant::now();
         let result = client.simple_query(&query.sql).await;
