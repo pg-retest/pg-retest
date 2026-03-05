@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
-use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -100,6 +100,11 @@ async fn handle_connection_inner(
     // ── Phase 4: Bidirectional relay with capture ───────────────────
     let (client_read, client_write) = tokio::io::split(client_stream);
     let (server_read, server_write) = tokio::io::split(server_stream);
+    // Buffer I/O to batch small protocol reads/writes
+    let client_read = BufReader::new(client_read);
+    let client_write = BufWriter::new(client_write);
+    let server_read = BufReader::new(server_read);
+    let server_write = BufWriter::new(server_write);
 
     let capture_tx2 = capture_tx.clone();
 
@@ -177,22 +182,27 @@ async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bo
             return Ok(true); // Auth complete, ready for queries
         }
 
-        // If server sent an auth request, client needs to respond
+        // If server sent an auth request, check if client needs to respond
         if is_auth_request {
-            // Check if it's AuthenticationOk (body = 0i32)
             let body = msg.body();
             if body.len() >= 4 {
                 let auth_type = i32::from_be_bytes([body[0], body[1], body[2], body[3]]);
-                if auth_type == 0 {
-                    // AuthenticationOk — server will send more messages, keep reading
-                    continue;
+                match auth_type {
+                    // AuthenticationOk — done with auth, server sends params next
+                    0 => continue,
+                    // AuthenticationSASLFinal — server verification, no client response
+                    12 => continue,
+                    // All others expect a client response:
+                    // 3=Cleartext, 5=MD5, 7=GSSAPI, 8=SSPI,
+                    // 10=SASL, 11=SASLContinue
+                    _ => {
+                        if let Some(client_msg) = protocol::read_message(client).await? {
+                            protocol::write_message(server, &client_msg).await?;
+                        } else {
+                            return Ok(false);
+                        }
+                    }
                 }
-            }
-            // Server wants auth data from client — relay client response
-            if let Some(client_msg) = protocol::read_message(client).await? {
-                protocol::write_message(server, &client_msg).await?;
-            } else {
-                return Ok(false);
             }
         }
     }
@@ -200,8 +210,8 @@ async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bo
 
 /// Relay messages from client to server, extracting capture data.
 async fn relay_client_to_server(
-    mut client: ReadHalf<TcpStream>,
-    mut server: WriteHalf<TcpStream>,
+    mut client: BufReader<ReadHalf<TcpStream>>,
+    mut server: BufWriter<WriteHalf<TcpStream>>,
     session_id: u64,
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     stmt_cache: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
@@ -250,6 +260,7 @@ async fn relay_client_to_server(
                 b'X' => {
                     // Terminate
                     protocol::write_message(&mut server, &msg).await?;
+                    server.flush().await?;
                     let _ = capture_tx.send(CaptureEvent::SessionEnd { session_id });
                     break;
                 }
@@ -257,18 +268,20 @@ async fn relay_client_to_server(
             }
         } else if msg.msg_type == b'X' {
             protocol::write_message(&mut server, &msg).await?;
+            server.flush().await?;
             break;
         }
 
         protocol::write_message(&mut server, &msg).await?;
+        server.flush().await?;
     }
     Ok(())
 }
 
 /// Relay messages from server to client, extracting capture data.
 async fn relay_server_to_client(
-    mut server: ReadHalf<TcpStream>,
-    mut client: WriteHalf<TcpStream>,
+    mut server: BufReader<ReadHalf<TcpStream>>,
+    mut client: BufWriter<WriteHalf<TcpStream>>,
     session_id: u64,
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     no_capture: bool,
@@ -303,6 +316,10 @@ async fn relay_server_to_client(
         }
 
         protocol::write_message(&mut client, &msg).await?;
+        // Flush after ReadyForQuery so client sees results promptly
+        if msg.msg_type == b'Z' {
+            client.flush().await?;
+        }
     }
     Ok(())
 }
