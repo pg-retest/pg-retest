@@ -189,15 +189,14 @@ pub fn print_ab_report(report: &ABComparisonReport) {
             let avg_improvement = ((baseline.avg_latency_us as f64 - best.avg_latency_us as f64)
                 / baseline.avg_latency_us as f64)
                 * 100.0;
-            let p95_improvement = if best.p95_latency_us < baseline.p95_latency_us
-                && baseline.p95_latency_us > 0
-            {
-                ((baseline.p95_latency_us as f64 - best.p95_latency_us as f64)
-                    / baseline.p95_latency_us as f64)
-                    * 100.0
-            } else {
-                0.0
-            };
+            let p95_improvement =
+                if best.p95_latency_us < baseline.p95_latency_us && baseline.p95_latency_us > 0 {
+                    ((baseline.p95_latency_us as f64 - best.p95_latency_us as f64)
+                        / baseline.p95_latency_us as f64)
+                        * 100.0
+                } else {
+                    0.0
+                };
             println!();
             println!(
                 "  Winner: {winner} ({avg_improvement:.0}% faster avg, {p95_improvement:.0}% faster P95)"

@@ -11,6 +11,7 @@ pub struct PipelineConfig {
     pub replay: ReplayConfig,
     pub thresholds: Option<ThresholdConfig>,
     pub output: Option<OutputConfig>,
+    pub variants: Option<Vec<VariantConfig>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,11 +22,18 @@ pub struct CaptureConfig {
     pub source_log: Option<PathBuf>,
     pub source_host: Option<String>,
     pub pg_version: Option<String>,
-    /// Source type: "pg-csv" (default), "mysql-slow"
+    /// Source type: "pg-csv" (default), "mysql-slow", "rds"
     #[serde(default = "default_source_type")]
     pub source_type: String,
     #[serde(default)]
     pub mask_values: bool,
+    /// RDS instance identifier (for source_type = "rds")
+    pub rds_instance: Option<String>,
+    /// AWS region for RDS instance
+    #[serde(default = "default_rds_region")]
+    pub rds_region: String,
+    /// Specific RDS log file to download (omit to use latest)
+    pub rds_log_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +57,14 @@ pub struct ReplayConfig {
     pub scale: u32,
     #[serde(default)]
     pub stagger_ms: u64,
+    #[serde(default)]
+    pub scale_analytical: Option<u32>,
+    #[serde(default)]
+    pub scale_transactional: Option<u32>,
+    #[serde(default)]
+    pub scale_mixed: Option<u32>,
+    #[serde(default)]
+    pub scale_bulk: Option<u32>,
     /// Target connection string (required if no [provision] section)
     pub target: Option<String>,
 }
@@ -69,8 +85,17 @@ pub struct OutputConfig {
     pub junit_xml: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct VariantConfig {
+    pub label: String,
+    pub target: String,
+}
+
 fn default_source_type() -> String {
     "pg-csv".to_string()
+}
+fn default_rds_region() -> String {
+    "us-east-1".to_string()
 }
 fn default_speed() -> f64 {
     1.0
@@ -96,12 +121,15 @@ pub fn load_config(path: &Path) -> Result<PipelineConfig> {
 /// and either a provision section or a target connection string.
 fn validate_config(config: &PipelineConfig) -> Result<()> {
     // Must have a way to get a workload
-    let has_workload = config
-        .capture
-        .as_ref()
-        .is_some_and(|c| c.workload.is_some() || c.source_log.is_some());
+    let has_workload = config.capture.as_ref().is_some_and(|c| {
+        c.workload.is_some()
+            || c.source_log.is_some()
+            || (c.source_type == "rds" && c.rds_instance.is_some())
+    });
     if !has_workload {
-        anyhow::bail!("Config must specify either [capture].workload or [capture].source_log");
+        anyhow::bail!(
+            "Config must specify either [capture].workload, [capture].source_log, or [capture].rds_instance (with source_type = \"rds\")"
+        );
     }
 
     // Must have a way to connect to target
@@ -235,6 +263,28 @@ read_only = true
     }
 
     #[test]
+    fn test_parse_per_category_scaling_config() {
+        let toml = r#"
+[capture]
+workload = "test.wkl"
+
+[replay]
+target = "host=localhost dbname=test"
+scale_analytical = 2
+scale_transactional = 4
+scale_mixed = 1
+scale_bulk = 0
+stagger_ms = 500
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.replay.scale_analytical, Some(2));
+        assert_eq!(config.replay.scale_transactional, Some(4));
+        assert_eq!(config.replay.scale_mixed, Some(1));
+        assert_eq!(config.replay.scale_bulk, Some(0));
+        assert_eq!(config.replay.stagger_ms, 500);
+    }
+
+    #[test]
     fn test_default_source_type_is_pg_csv() {
         let toml = r#"
 [capture]
@@ -245,5 +295,65 @@ target = "host=localhost"
 "#;
         let config: PipelineConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.capture.as_ref().unwrap().source_type, "pg-csv");
+    }
+
+    #[test]
+    fn test_parse_rds_config() {
+        let toml = r#"
+[capture]
+source_type = "rds"
+rds_instance = "mydb-instance"
+rds_region = "us-west-2"
+
+[replay]
+target = "host=localhost dbname=test"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let cap = config.capture.as_ref().unwrap();
+        assert_eq!(cap.source_type, "rds");
+        assert_eq!(cap.rds_instance.as_deref(), Some("mydb-instance"));
+        assert_eq!(cap.rds_region, "us-west-2");
+        // Validation should pass (rds_instance counts as workload source)
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_rds_config_default_region() {
+        let toml = r#"
+[capture]
+source_type = "rds"
+rds_instance = "mydb-instance"
+
+[replay]
+target = "host=localhost dbname=test"
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let cap = config.capture.as_ref().unwrap();
+        assert_eq!(cap.rds_region, "us-east-1");
+    }
+
+    #[test]
+    fn test_parse_variant_config() {
+        let toml = r#"
+[capture]
+workload = "test.wkl"
+
+[[variants]]
+label = "pg16-default"
+target = "host=db1 dbname=app"
+
+[[variants]]
+label = "pg16-tuned"
+target = "host=db2 dbname=app"
+
+[replay]
+speed = 1.0
+read_only = true
+"#;
+        let config: PipelineConfig = toml::from_str(toml).unwrap();
+        let variants = config.variants.unwrap();
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0].label, "pg16-default");
+        assert_eq!(variants[1].target, "host=db2 dbname=app");
     }
 }

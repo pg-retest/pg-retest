@@ -21,6 +21,7 @@ fn main() -> Result<()> {
         Commands::Inspect(args) => cmd_inspect(args),
         Commands::Proxy(args) => cmd_proxy(args),
         Commands::Run(args) => cmd_run(args),
+        Commands::AB(args) => cmd_ab(args),
     }
 }
 
@@ -32,14 +33,34 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
 
     let mut profile = match args.source_type.as_str() {
         "pg-csv" => {
+            let source_log = args
+                .source_log
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("--source-log is required for pg-csv capture"))?;
             let capture = CsvLogCapture;
-            capture.capture_from_file(&args.source_log, &args.source_host, &args.pg_version)?
+            capture.capture_from_file(source_log, &args.source_host, &args.pg_version)?
         }
         "mysql-slow" => {
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for mysql-slow capture")
+            })?;
             let capture = MysqlSlowLogCapture;
-            capture.capture_from_file(&args.source_log, &args.source_host, true)?
+            capture.capture_from_file(source_log, &args.source_host, true)?
         }
-        other => anyhow::bail!("Unknown source type: {other}. Supported: pg-csv, mysql-slow"),
+        "rds" => {
+            use pg_retest::capture::rds::RdsCapture;
+            let instance_id = args.rds_instance.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--rds-instance is required for --source-type rds")
+            })?;
+            let capture = RdsCapture;
+            capture.capture_from_instance(
+                instance_id,
+                &args.rds_region,
+                args.rds_log_file.as_deref(),
+                &args.source_host,
+            )?
+        }
+        other => anyhow::bail!("Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds"),
     };
 
     if args.mask_values {
@@ -212,6 +233,60 @@ fn cmd_run(args: pg_retest::cli::RunArgs) -> Result<()> {
 
     if result.exit_code != 0 {
         std::process::exit(result.exit_code);
+    }
+
+    Ok(())
+}
+
+fn cmd_ab(args: pg_retest::cli::ABArgs) -> Result<()> {
+    use pg_retest::compare::ab::{
+        compute_ab_comparison, print_ab_report, write_ab_json, VariantResult,
+    };
+    use pg_retest::profile::io;
+    use pg_retest::replay::{session::run_replay, ReplayMode};
+
+    let profile = io::read_profile(&args.workload)?;
+    let mode = if args.read_only {
+        ReplayMode::ReadOnly
+    } else {
+        ReplayMode::ReadWrite
+    };
+
+    // Parse variant definitions: "label=connection_string"
+    let parsed_variants: Vec<(String, String)> = args
+        .variants
+        .iter()
+        .map(|v| {
+            let parts: Vec<&str> = v.splitn(2, '=').collect();
+            if parts.len() != 2 {
+                anyhow::bail!("Invalid variant format: {v}. Expected: label=connection_string");
+            }
+            Ok((parts[0].to_string(), parts[1].to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    println!(
+        "A/B test: {} variants, {} sessions, {} queries",
+        parsed_variants.len(),
+        profile.metadata.total_sessions,
+        profile.metadata.total_queries,
+    );
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let mut variant_results = Vec::new();
+
+    for (label, conn_string) in &parsed_variants {
+        println!("Replaying variant '{label}' against {conn_string}...");
+        let results = rt.block_on(run_replay(&profile, conn_string, mode, args.speed))?;
+        variant_results.push(VariantResult::from_results(label.clone(), results));
+    }
+
+    let report = compute_ab_comparison(variant_results, args.threshold);
+    print_ab_report(&report);
+
+    if let Some(json_path) = &args.json {
+        write_ab_json(json_path, &report)?;
+        println!("  JSON report written to {}", json_path.display());
     }
 
     Ok(())

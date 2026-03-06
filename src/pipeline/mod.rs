@@ -133,19 +133,14 @@ fn load_or_capture_workload(config: &PipelineConfig) -> Result<WorkloadProfile> 
         return io::read_profile(wkl_path).map_err(|e| anyhow::anyhow!("Capture error: {e}"));
     }
 
-    // Otherwise, capture from CSV log
-    let source_log = capture_cfg
-        .source_log
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No workload or source_log specified"))?;
-
-    info!(
-        "Capturing from {} (type: {})",
-        source_log.display(),
-        capture_cfg.source_type
-    );
+    // Otherwise, capture from log source
+    info!("Capturing (type: {})", capture_cfg.source_type);
     let mut profile = match capture_cfg.source_type.as_str() {
         "pg-csv" => {
+            let source_log = capture_cfg.source_log.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("Capture error: source_log required for source_type = \"pg-csv\"")
+            })?;
+            info!("Capturing from {}", source_log.display());
             let capture = CsvLogCapture;
             capture
                 .capture_from_file(
@@ -156,6 +151,12 @@ fn load_or_capture_workload(config: &PipelineConfig) -> Result<WorkloadProfile> 
                 .map_err(|e| anyhow::anyhow!("Capture error: {e}"))?
         }
         "mysql-slow" => {
+            let source_log = capture_cfg.source_log.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Capture error: source_log required for source_type = \"mysql-slow\""
+                )
+            })?;
+            info!("Capturing from {}", source_log.display());
             use crate::capture::mysql_slow::MysqlSlowLogCapture;
             let capture = MysqlSlowLogCapture;
             capture
@@ -163,6 +164,22 @@ fn load_or_capture_workload(config: &PipelineConfig) -> Result<WorkloadProfile> 
                     source_log,
                     capture_cfg.source_host.as_deref().unwrap_or("unknown"),
                     true, // always transform MySQL→PG
+                )
+                .map_err(|e| anyhow::anyhow!("Capture error: {e}"))?
+        }
+        "rds" => {
+            use crate::capture::rds::RdsCapture;
+            let instance_id = capture_cfg.rds_instance.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("Capture error: rds_instance required for source_type = \"rds\"")
+            })?;
+            info!("Capturing from RDS instance {}", instance_id);
+            let capture = RdsCapture;
+            capture
+                .capture_from_instance(
+                    instance_id,
+                    &capture_cfg.rds_region,
+                    capture_cfg.rds_log_file.as_deref(),
+                    capture_cfg.source_host.as_deref().unwrap_or("rds"),
                 )
                 .map_err(|e| anyhow::anyhow!("Capture error: {e}"))?
         }

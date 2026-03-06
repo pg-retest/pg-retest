@@ -33,15 +33,19 @@ pub enum Commands {
 
     /// Run full CI/CD pipeline (capture → provision → replay → compare)
     Run(RunArgs),
+
+    /// Compare replay performance across different database targets
+    #[command(name = "ab")]
+    AB(ABArgs),
 }
 
 #[derive(clap::Args)]
 pub struct CaptureArgs {
-    /// Path to PostgreSQL CSV log file
+    /// Path to source log file (required for pg-csv, mysql-slow)
     #[arg(long)]
-    pub source_log: PathBuf,
+    pub source_log: Option<PathBuf>,
 
-    /// Source log type: pg-csv (default), mysql-slow
+    /// Source log type: pg-csv (default), mysql-slow, rds
     #[arg(long, default_value = "pg-csv")]
     pub source_type: String,
 
@@ -60,6 +64,18 @@ pub struct CaptureArgs {
     /// Mask string and numeric literals in captured SQL (PII protection)
     #[arg(long, default_value_t = false)]
     pub mask_values: bool,
+
+    /// RDS instance identifier (for --source-type rds)
+    #[arg(long)]
+    pub rds_instance: Option<String>,
+
+    /// AWS region for RDS instance
+    #[arg(long, default_value = "us-east-1")]
+    pub rds_region: String,
+
+    /// Specific RDS log file to download (omit to use latest)
+    #[arg(long)]
+    pub rds_log_file: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -91,6 +107,22 @@ pub struct ReplayArgs {
     /// Stagger interval between scaled copies (milliseconds)
     #[arg(long, default_value_t = 0)]
     pub stagger_ms: u64,
+
+    /// Scale analytical sessions by N (per-category scaling)
+    #[arg(long)]
+    pub scale_analytical: Option<u32>,
+
+    /// Scale transactional sessions by N (per-category scaling)
+    #[arg(long)]
+    pub scale_transactional: Option<u32>,
+
+    /// Scale mixed sessions by N (per-category scaling)
+    #[arg(long)]
+    pub scale_mixed: Option<u32>,
+
+    /// Scale bulk sessions by N (per-category scaling)
+    #[arg(long)]
+    pub scale_bulk: Option<u32>,
 }
 
 #[derive(clap::Args)]
@@ -170,4 +202,31 @@ pub struct RunArgs {
     /// Path to pipeline config file (.toml)
     #[arg(long, default_value = ".pg-retest.toml")]
     pub config: PathBuf,
+}
+
+#[derive(clap::Args)]
+pub struct ABArgs {
+    /// Path to workload profile (.wkl)
+    #[arg(long)]
+    pub workload: PathBuf,
+
+    /// Variant definitions: "label=connection_string" (specify 2+ times)
+    #[arg(long = "variant", required = true, num_args = 2..)]
+    pub variants: Vec<String>,
+
+    /// Replay only SELECT queries
+    #[arg(long, default_value_t = false)]
+    pub read_only: bool,
+
+    /// Speed multiplier
+    #[arg(long, default_value_t = 1.0)]
+    pub speed: f64,
+
+    /// Output JSON report path
+    #[arg(long)]
+    pub json: Option<PathBuf>,
+
+    /// Regression threshold percentage
+    #[arg(long, default_value_t = 20.0)]
+    pub threshold: f64,
 }

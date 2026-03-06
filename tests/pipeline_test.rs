@@ -15,6 +15,9 @@ fn minimal_config(workload_path: &str, target: &str) -> PipelineConfig {
             pg_version: None,
             source_type: "pg-csv".to_string(),
             mask_values: false,
+            rds_instance: None,
+            rds_region: "us-east-1".to_string(),
+            rds_log_file: None,
         }),
         provision: None,
         replay: ReplayConfig {
@@ -22,10 +25,15 @@ fn minimal_config(workload_path: &str, target: &str) -> PipelineConfig {
             read_only: true,
             scale: 1,
             stagger_ms: 0,
+            scale_analytical: None,
+            scale_transactional: None,
+            scale_mixed: None,
+            scale_bulk: None,
             target: Some(target.to_string()),
         },
         thresholds: None,
         output: None,
+        variants: None,
     }
 }
 
@@ -39,6 +47,9 @@ fn test_pipeline_config_validation_no_workload() {
             pg_version: None,
             source_type: "pg-csv".to_string(),
             mask_values: false,
+            rds_instance: None,
+            rds_region: "us-east-1".to_string(),
+            rds_log_file: None,
         }),
         provision: None,
         replay: ReplayConfig {
@@ -46,10 +57,15 @@ fn test_pipeline_config_validation_no_workload() {
             read_only: false,
             scale: 1,
             stagger_ms: 0,
+            scale_analytical: None,
+            scale_transactional: None,
+            scale_mixed: None,
+            scale_bulk: None,
             target: Some("host=localhost".into()),
         },
         thresholds: None,
         output: None,
+        variants: None,
     };
     // Pipeline should fail because there's no workload source
     let result = run_pipeline(&config);
@@ -150,6 +166,9 @@ fn test_pipeline_e2e_with_docker() {
             pg_version: Some("16".into()),
             source_type: "pg-csv".to_string(),
             mask_values: false,
+            rds_instance: None,
+            rds_region: "us-east-1".to_string(),
+            rds_log_file: None,
         }),
         provision: Some(ProvisionConfig {
             backend: "docker".into(),
@@ -163,6 +182,10 @@ fn test_pipeline_e2e_with_docker() {
             read_only: true,
             scale: 1,
             stagger_ms: 0,
+            scale_analytical: None,
+            scale_transactional: None,
+            scale_mixed: None,
+            scale_bulk: None,
             target: None, // use provisioned DB
         },
         thresholds: Some(ThresholdConfig {
@@ -176,6 +199,7 @@ fn test_pipeline_e2e_with_docker() {
             json_report: Some(json_file.path().to_path_buf()),
             junit_xml: Some(junit_file.path().to_path_buf()),
         }),
+        variants: None,
     };
 
     let result = run_pipeline(&config);

@@ -94,13 +94,7 @@ pub fn scale_sessions_by_class(
 
     // First pass: add all copy-0 (original) sessions with no stagger
     let mut result: Vec<Session> = Vec::new();
-    let mut next_id: u64 = profile
-        .sessions
-        .iter()
-        .map(|s| s.id)
-        .max()
-        .unwrap_or(0)
-        + 1;
+    let mut next_id: u64 = profile.sessions.iter().map(|s| s.id).max().unwrap_or(0) + 1;
 
     for (class, sessions) in &grouped {
         let scale = class_scales.get(class).copied().unwrap_or(1);

@@ -90,6 +90,9 @@ fn test_mysql_pipeline_config_roundtrip() {
             pg_version: None,
             source_type: "mysql-slow".into(),
             mask_values: false,
+            rds_instance: None,
+            rds_region: "us-east-1".into(),
+            rds_log_file: None,
         }),
         provision: None,
         replay: ReplayConfig {
@@ -97,10 +100,15 @@ fn test_mysql_pipeline_config_roundtrip() {
             read_only: true,
             scale: 1,
             stagger_ms: 0,
+            scale_analytical: None,
+            scale_transactional: None,
+            scale_mixed: None,
+            scale_bulk: None,
             target: Some("host=127.0.0.1 port=1 dbname=test".into()), // will fail at replay
         },
         thresholds: None,
         output: None,
+        variants: None,
     };
 
     let result = pipeline::run_pipeline(&config);

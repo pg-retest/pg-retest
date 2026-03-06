@@ -63,14 +63,22 @@ Key modules:
 - `classify` — Workload classification (Analytical/Transactional/Mixed/Bulk) based on read/write ratio, latency, transaction count
 - `compare` — Performance comparison logic + terminal/JSON reporting + exit code evaluation
 - `compare::capacity` — Scaled replay reporting (throughput QPS, latency percentiles, error rate)
-- `cli` — Clap derive-based CLI argument structs
+- `config` — TOML pipeline config parsing and validation (`PipelineConfig`, `ThresholdConfig`, etc.)
+- `pipeline` — CI/CD pipeline orchestrator (capture → provision → replay → compare → threshold → report)
+- `provision` — Docker provisioner via CLI subprocess (start/teardown containers, backup restore)
+- `compare::threshold` — Threshold-based pass/fail evaluation (p95, p99, error rate, regression count)
+- `compare::junit` — JUnit XML output for CI test result integration
+- `transform` — Composable SQL transform pipeline (`SqlTransformer` trait, `TransformPipeline`) for cross-database SQL conversion
+- `transform::mysql_to_pg` — MySQL-to-PostgreSQL transform rules (backticks→double quotes, LIMIT rewrite, IFNULL→COALESCE, IF→CASE WHEN, UNIX_TIMESTAMP→EXTRACT)
+- `capture::mysql_slow` — MySQL slow query log parser (`MysqlSlowLogCapture`) with integrated transform pipeline
+- `cli` — Clap derive-based CLI argument structs (7 subcommands: capture, replay, compare, inspect, proxy, run)
 
 ## Milestone Status
 
-- **M1: Capture & Replay** — Complete (with gap closure). CSV log capture, transaction boundaries, PII masking, async replay with transaction-aware error handling, comparison reports with exit codes. 1725 LOC, 59 tests.
+- **M1: Capture & Replay** — Complete (with gap closure). CSV log capture, proxy capture, transaction boundaries, PII masking, async replay with transaction-aware error handling, comparison reports with exit codes.
 - **M2: Scaled Benchmark** — Complete. Workload classification (Analytical/Transactional/Mixed/Bulk), session scaling with stagger, capacity planning reports.
-- **M3: CI/CD Integration** — Design complete (`docs/plans/2026-03-04-m3-cicd-design.md`). TOML config, Docker provisioner, JUnit XML output, pipeline orchestrator.
-- **M4: Cross-Database Capture** — Design complete (`docs/plans/2026-03-04-m4-mysql-capture-design.md`). MySQL slow/general log parsers, SQL transform pipeline.
+- **M3: CI/CD Integration** — Complete. TOML config (`pg-retest run --config .pg-retest.toml`), Docker provisioner via CLI subprocess, JUnit XML output, threshold evaluation, pipeline orchestrator with staged exit codes (0-5).
+- **M4: Cross-Database Capture (MySQL)** — Complete. MySQL slow query log parser, composable SQL transform pipeline (regex-based: backticks, LIMIT, IFNULL, IF, UNIX_TIMESTAMP), CLI `--source-type mysql-slow`, pipeline config support. 142 tests.
 - **M5: AI-Assisted Tuning** — Design complete (`docs/plans/2026-03-04-m5-ai-tuning-design.md`). Claude API integration, tuning loop, A/B variants.
 
 ## Gotchas
@@ -84,6 +92,9 @@ Key modules:
 - `QueryKind` now includes `Begin`, `Commit`, `Rollback` variants — existing tests that asserted `BEGIN` → `Other` were updated to expect `Begin`.
 - PII masking (`--mask-values`) uses a hand-written character-level state machine, not regex. This handles SQL edge cases (escaped quotes, dollar-quoting, identifiers with numbers) correctly.
 - Scaling write workloads (`--scale N` with DML) prints a safety warning — scaled writes execute multiple times and change data state.
+- MySQL capture: `--source-type mysql-slow` enables the transform pipeline automatically. `SHOW`, `SET NAMES`, `USE` and other MySQL-specific commands are skipped (not included in the profile).
+- SQL transforms use regex (not `sqlparser`). This covers ~80-90% of real MySQL queries. Known limitations: backtick replacement inside string literals, single LIMIT rewrite per query.
+- The `capture_method` field in WorkloadProfile distinguishes sources: `"csv_log"` for PG, `"mysql_slow_log"` for MySQL.
 
 ## Conventions
 
