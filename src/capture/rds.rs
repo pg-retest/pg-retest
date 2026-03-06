@@ -196,7 +196,7 @@ fn run_download_portion(
         region,
         "--log-file-name",
         log_file_name,
-        "--starting-token",
+        "--marker",
         marker,
         "--output",
         "json",

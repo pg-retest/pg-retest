@@ -145,6 +145,10 @@ fn test_scale_by_class_analytical_2x_transactional_4x() {
     let scaled = scale_sessions_by_class(&profile, &class_scales, 0);
     // 2 analytical * 2x = 4, 1 transactional * 4x = 4, total = 8
     assert_eq!(scaled.len(), 8);
+
+    // All session IDs must be unique
+    let ids: std::collections::HashSet<u64> = scaled.iter().map(|s| s.id).collect();
+    assert_eq!(ids.len(), scaled.len(), "session IDs must be unique");
 }
 
 #[test]
@@ -196,4 +200,47 @@ fn test_scale_by_class_all_same_class() {
     let scaled = scale_sessions_by_class(&profile, &class_scales, 0);
     // 2 sessions * 2x = 4
     assert_eq!(scaled.len(), 4);
+
+    // All session IDs must be unique
+    let ids: std::collections::HashSet<u64> = scaled.iter().map(|s| s.id).collect();
+    assert_eq!(ids.len(), scaled.len(), "session IDs must be unique");
+}
+
+#[test]
+fn test_scale_by_class_cross_class_stagger() {
+    let profile = make_profile(vec![analytical_session(1), transactional_session(2)]);
+
+    let mut class_scales = HashMap::new();
+    class_scales.insert(WorkloadClass::Analytical, 2u32);
+    class_scales.insert(WorkloadClass::Transactional, 2);
+    class_scales.insert(WorkloadClass::Mixed, 1);
+    class_scales.insert(WorkloadClass::Bulk, 1);
+
+    let scaled = scale_sessions_by_class(&profile, &class_scales, 500);
+    // 1 analytical * 2x + 1 transactional * 2x = 4
+    assert_eq!(scaled.len(), 4);
+
+    // All session IDs must be unique
+    let ids: std::collections::HashSet<u64> = scaled.iter().map(|s| s.id).collect();
+    assert_eq!(ids.len(), scaled.len(), "session IDs must be unique");
+
+    // Copies (non-originals) should all have stagger > 0
+    // The two originals have offset 0, the two copies should have stagger offsets
+    let copy_offsets: Vec<u64> = scaled
+        .iter()
+        .filter_map(|s| {
+            let first_offset = s.queries.first().map(|q| q.start_offset_us)?;
+            if first_offset > 0 {
+                Some(first_offset)
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Both copies should have non-zero stagger and be distinct
+    assert_eq!(copy_offsets.len(), 2, "should have 2 staggered copies");
+    assert_ne!(
+        copy_offsets[0], copy_offsets[1],
+        "cross-class staggers should be distinct"
+    );
 }

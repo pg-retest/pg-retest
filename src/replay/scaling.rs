@@ -81,7 +81,6 @@ pub fn scale_sessions_by_class(
     stagger_ms: u64,
 ) -> Vec<Session> {
     let stagger_us = stagger_ms * 1000;
-    let session_count = profile.sessions.len() as u64;
 
     // Classify and group sessions
     let mut grouped: HashMap<WorkloadClass, Vec<&Session>> = HashMap::new();
@@ -93,25 +92,40 @@ pub fn scale_sessions_by_class(
             .push(session);
     }
 
-    // Scale each group
+    // First pass: add all copy-0 (original) sessions with no stagger
     let mut result: Vec<Session> = Vec::new();
-    let mut copy_counter: u64 = 0;
+    let mut next_id: u64 = profile
+        .sessions
+        .iter()
+        .map(|s| s.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
 
     for (class, sessions) in &grouped {
         let scale = class_scales.get(class).copied().unwrap_or(1);
         if scale == 0 {
             continue;
         }
+        // Copy 0: keep original sessions with original IDs and offsets
+        for session in sessions {
+            result.push((*session).clone());
+        }
+    }
 
-        for copy_index in 0..scale as u64 {
-            let offset = if copy_index > 0 {
-                (copy_counter + copy_index) * stagger_us
-            } else {
-                0
-            };
+    // Second pass: add duplicate copies (copy_index >= 1) with stagger
+    let mut global_copy: u64 = 0; // tracks stagger across all classes
+    for (class, sessions) in &grouped {
+        let scale = class_scales.get(class).copied().unwrap_or(1);
+        if scale <= 1 {
+            continue; // 0 already excluded, 1 already added
+        }
+
+        for copy_index in 1..scale as u64 {
+            global_copy += 1;
+            let offset = global_copy * stagger_us;
 
             for session in sessions {
-                let new_id = session.id + copy_index * session_count;
                 let queries = session
                     .queries
                     .iter()
@@ -125,15 +139,13 @@ pub fn scale_sessions_by_class(
                     .collect();
 
                 result.push(Session {
-                    id: new_id,
+                    id: next_id,
                     user: session.user.clone(),
                     database: session.database.clone(),
                     queries,
                 });
+                next_id += 1;
             }
-        }
-        if scale > 1 {
-            copy_counter += scale as u64 - 1;
         }
     }
 
