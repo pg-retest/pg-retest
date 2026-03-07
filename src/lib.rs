@@ -9,4 +9,5 @@ pub mod provision;
 pub mod proxy;
 pub mod replay;
 pub mod transform;
+pub mod tuner;
 pub mod web;
