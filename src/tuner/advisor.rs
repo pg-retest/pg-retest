@@ -319,9 +319,10 @@ impl TuningAdvisor for OpenAiAdvisor {
             .timeout(std::time::Duration::from_secs(60))
             .build()?;
 
-        let tools: Vec<serde_json::Value> = tool_schema()
+        let schema = tool_schema();
+        let tools: Vec<serde_json::Value> = schema
             .as_array()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("tool_schema did not return an array"))?
             .iter()
             .map(|t| {
                 json!({
@@ -435,9 +436,12 @@ impl TuningAdvisor for OllamaAdvisor {
         }
 
         let data: serde_json::Value = resp.json().await?;
-        let response_text = data["response"].as_str().unwrap_or("[]");
+        let response_text = data["response"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Ollama response missing 'response' field"))?;
 
-        let recs: Vec<Recommendation> = serde_json::from_str(response_text).unwrap_or_default();
+        let recs: Vec<Recommendation> = serde_json::from_str(response_text)
+            .map_err(|e| anyhow::anyhow!("Failed to parse Ollama recommendations: {e}"))?;
 
         Ok(recs)
     }
