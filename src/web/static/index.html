@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pg-retest — Database Testing Kit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/css/app.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: {
+                            850: '#141b2d',
+                            950: '#0a0f1a',
+                        },
+                        accent: {
+                            DEFAULT: '#2dd4bf',
+                            dim: '#14b8a6',
+                            bright: '#5eead4',
+                            glow: 'rgba(45, 212, 191, 0.15)',
+                        },
+                        amber: {
+                            glow: 'rgba(251, 191, 36, 0.15)',
+                        },
+                        danger: {
+                            DEFAULT: '#f43f5e',
+                            glow: 'rgba(244, 63, 94, 0.15)',
+                        },
+                    },
+                    fontFamily: {
+                        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans antialiased" x-data="app()" x-init="init()">
+
+    <!-- Toast container -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2" x-data="toasts()">
+        <template x-for="toast in items" :key="toast.id">
+            <div class="toast-item px-4 py-3 rounded-lg shadow-xl border text-sm font-medium flex items-center gap-2 min-w-[300px]"
+                 :class="{
+                     'bg-slate-800 border-accent/30 text-accent': toast.type === 'success',
+                     'bg-slate-800 border-danger/30 text-danger': toast.type === 'error',
+                     'bg-slate-800 border-amber-400/30 text-amber-400': toast.type === 'warning',
+                     'bg-slate-800 border-slate-600 text-slate-300': toast.type === 'info',
+                 }"
+                 x-transition:enter="transition ease-out duration-300"
+                 x-transition:enter-start="opacity-0 translate-x-8"
+                 x-transition:enter-end="opacity-100 translate-x-0"
+                 x-transition:leave="transition ease-in duration-200"
+                 x-transition:leave-start="opacity-100"
+                 x-transition:leave-end="opacity-0">
+                <span x-text="toast.message"></span>
+            </div>
+        </template>
+    </div>
+
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <aside class="sidebar w-56 flex-shrink-0 bg-slate-850 border-r border-slate-800/80 flex flex-col transition-all duration-300"
+               :class="{ 'w-56': !sidebarCollapsed, 'w-16': sidebarCollapsed }">
+            <!-- Logo -->
+            <div class="h-14 flex items-center px-4 border-b border-slate-800/80">
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <div class="w-8 h-8 rounded-lg bg-accent/20 border border-accent/30 flex items-center justify-center flex-shrink-0">
+                        <span class="font-mono font-semibold text-accent text-xs">PG</span>
+                    </div>
+                    <span class="font-semibold text-sm tracking-tight whitespace-nowrap" x-show="!sidebarCollapsed" x-transition>pg-retest</span>
+                </div>
+            </div>
+
+            <!-- Nav items -->
+            <nav class="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
+                <template x-for="item in navItems" :key="item.id">
+                    <a :href="'#' + item.id"
+                       class="nav-item flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-all duration-150 group"
+                       :class="page === item.id
+                           ? 'bg-accent/10 text-accent border border-accent/20'
+                           : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'"
+                       @click="page = item.id">
+                        <span class="text-base flex-shrink-0" x-html="item.icon"></span>
+                        <span class="text-[13px] whitespace-nowrap" x-show="!sidebarCollapsed" x-text="item.label"></span>
+                    </a>
+                </template>
+            </nav>
+
+            <!-- Collapse toggle -->
+            <div class="p-2 border-t border-slate-800/80">
+                <button @click="sidebarCollapsed = !sidebarCollapsed"
+                        class="w-full flex items-center justify-center py-2 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800/60 transition-colors">
+                    <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-180': sidebarCollapsed }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M15 18l-6-6 6-6"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- WS status -->
+            <div class="px-3 py-2 border-t border-slate-800/80 flex items-center gap-2 text-xs text-slate-500">
+                <span class="w-2 h-2 rounded-full" :class="wsConnected ? 'bg-accent animate-pulse' : 'bg-danger'"></span>
+                <span x-show="!sidebarCollapsed" x-text="wsConnected ? 'Connected' : 'Disconnected'"></span>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            <!-- Top bar -->
+            <header class="h-14 flex items-center justify-between px-6 border-b border-slate-800/80 bg-slate-850/50 backdrop-blur-sm flex-shrink-0">
+                <div class="flex items-center gap-3">
+                    <h1 class="text-sm font-semibold" x-text="currentPageLabel"></h1>
+                    <span class="text-xs text-slate-500 font-mono" x-text="'v' + version"></span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <!-- Active tasks indicator -->
+                    <div x-show="activeTasks.length > 0" class="flex items-center gap-2 px-3 py-1 rounded-full bg-accent/10 border border-accent/20">
+                        <span class="relative flex h-2 w-2">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
+                        </span>
+                        <span class="text-xs font-mono text-accent" x-text="activeTasks.length + ' task' + (activeTasks.length > 1 ? 's' : '')"></span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page content -->
+            <div class="flex-1 overflow-y-auto p-6" id="page-content">
+                <!-- Dashboard -->
+                <div x-show="page === 'dashboard'" x-data="dashboardPage()" x-init="load()" x-effect="if ($store.app.page === 'dashboard') load()">
+                    <div id="dashboard-content"></div>
+                </div>
+                <!-- Workloads -->
+                <div x-show="page === 'workloads'" x-data="workloadsPage()" x-init="load()" x-effect="if ($store.app.page === 'workloads') load()">
+                    <div id="workloads-content"></div>
+                </div>
+                <!-- Proxy -->
+                <div x-show="page === 'proxy'" x-data="proxyPage()" x-init="load()">
+                    <div id="proxy-content"></div>
+                </div>
+                <!-- Replay -->
+                <div x-show="page === 'replay'" x-data="replayPage()" x-init="load()" x-effect="if ($store.app.page === 'replay') load()">
+                    <div id="replay-content"></div>
+                </div>
+                <!-- A/B Testing -->
+                <div x-show="page === 'ab'" x-data="abPage()" x-init="load()" x-effect="if ($store.app.page === 'ab') load()">
+                    <div id="ab-content"></div>
+                </div>
+                <!-- Compare -->
+                <div x-show="page === 'compare'" x-data="comparePage()" x-init="load()" x-effect="if ($store.app.page === 'compare') load()">
+                    <div id="compare-content"></div>
+                </div>
+                <!-- Pipeline -->
+                <div x-show="page === 'pipeline'" x-data="pipelinePage()" x-init="load()">
+                    <div id="pipeline-content"></div>
+                </div>
+                <!-- Transform -->
+                <div x-show="page === 'transform'" x-data="transformPage()" x-init="load()" x-effect="if ($store.app.page === 'transform') load()">
+                    <div id="transform-content"></div>
+                </div>
+                <!-- History -->
+                <div x-show="page === 'history'" x-data="historyPage()" x-init="load()" x-effect="if ($store.app.page === 'history') load()">
+                    <div id="history-content"></div>
+                </div>
+                <!-- Help -->
+                <div x-show="page === 'help'">
+                    <div id="help-content"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/js/api.js"></script>
+    <script src="/js/ws.js"></script>
+    <script src="/js/components/charts.js"></script>
+    <script src="/js/components/tables.js"></script>
+    <script src="/js/components/forms.js"></script>
+    <script src="/js/components/status.js"></script>
+    <script src="/js/pages/dashboard.js"></script>
+    <script src="/js/pages/workloads.js"></script>
+    <script src="/js/pages/proxy.js"></script>
+    <script src="/js/pages/replay.js"></script>
+    <script src="/js/pages/ab.js"></script>
+    <script src="/js/pages/compare.js"></script>
+    <script src="/js/pages/pipeline.js"></script>
+    <script src="/js/pages/transform.js"></script>
+    <script src="/js/pages/history.js"></script>
+    <script src="/js/pages/help.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
