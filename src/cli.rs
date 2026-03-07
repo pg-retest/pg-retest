@@ -37,6 +37,12 @@ pub enum Commands {
     /// Compare replay performance across different database targets
     #[command(name = "ab")]
     AB(ABArgs),
+
+    /// Launch the web dashboard
+    Web(WebArgs),
+
+    /// Transform a workload using AI-generated plans
+    Transform(TransformArgs),
 }
 
 #[derive(clap::Args)]
@@ -229,4 +235,89 @@ pub struct ABArgs {
     /// Regression threshold percentage
     #[arg(long, default_value_t = 20.0)]
     pub threshold: f64,
+}
+
+#[derive(clap::Args)]
+pub struct WebArgs {
+    /// Port to listen on
+    #[arg(long, default_value_t = 8080)]
+    pub port: u16,
+
+    /// Data directory for SQLite database and workload files
+    #[arg(long, default_value = "./data")]
+    pub data_dir: std::path::PathBuf,
+}
+
+#[derive(clap::Args)]
+pub struct TransformArgs {
+    #[command(subcommand)]
+    pub action: TransformAction,
+}
+
+#[derive(Subcommand)]
+pub enum TransformAction {
+    /// Analyze a workload and show query groups (no AI needed)
+    Analyze {
+        /// Path to source workload profile (.wkl)
+        #[arg(long)]
+        workload: PathBuf,
+
+        /// Output analysis as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Generate a transform plan using AI
+    Plan {
+        /// Path to source workload profile (.wkl)
+        #[arg(long)]
+        workload: PathBuf,
+
+        /// Natural language description of the scenario
+        #[arg(long)]
+        prompt: String,
+
+        /// LLM provider: claude, openai, ollama
+        #[arg(long, default_value = "claude")]
+        provider: String,
+
+        /// API key (or set ANTHROPIC_API_KEY / OPENAI_API_KEY env var)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Override API URL
+        #[arg(long)]
+        api_url: Option<String>,
+
+        /// Override model name
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Output plan file path
+        #[arg(short, long, default_value = "transform-plan.toml")]
+        output: PathBuf,
+
+        /// Show what AI would see without calling API
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Apply a transform plan to produce a new workload
+    Apply {
+        /// Path to source workload profile (.wkl)
+        #[arg(long)]
+        workload: PathBuf,
+
+        /// Path to transform plan (.toml)
+        #[arg(long)]
+        plan: PathBuf,
+
+        /// Output workload profile (.wkl)
+        #[arg(short, long, default_value = "transformed.wkl")]
+        output: PathBuf,
+
+        /// RNG seed for reproducible injection
+        #[arg(long)]
+        seed: Option<u64>,
+    },
 }

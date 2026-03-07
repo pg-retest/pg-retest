@@ -22,6 +22,8 @@ fn main() -> Result<()> {
         Commands::Proxy(args) => cmd_proxy(args),
         Commands::Run(args) => cmd_run(args),
         Commands::AB(args) => cmd_ab(args),
+        Commands::Web(args) => cmd_web(args),
+        Commands::Transform(args) => cmd_transform(args),
     }
 }
 
@@ -94,8 +96,52 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
         ReplayMode::ReadWrite
     };
 
-    // Scale sessions if requested
-    let replay_profile = if args.scale > 1 {
+    // Scale sessions if requested (per-category takes priority over uniform)
+    let has_class_scaling = args.scale_analytical.is_some()
+        || args.scale_transactional.is_some()
+        || args.scale_mixed.is_some()
+        || args.scale_bulk.is_some();
+
+    let replay_profile = if has_class_scaling {
+        use pg_retest::classify::WorkloadClass;
+        use pg_retest::replay::scaling::scale_sessions_by_class;
+        use std::collections::HashMap;
+
+        let mut class_scales = HashMap::new();
+        class_scales.insert(
+            WorkloadClass::Analytical,
+            args.scale_analytical.unwrap_or(1),
+        );
+        class_scales.insert(
+            WorkloadClass::Transactional,
+            args.scale_transactional.unwrap_or(1),
+        );
+        class_scales.insert(WorkloadClass::Mixed, args.scale_mixed.unwrap_or(1));
+        class_scales.insert(WorkloadClass::Bulk, args.scale_bulk.unwrap_or(1));
+
+        if let Some(warning) = check_write_safety(&profile) {
+            println!("{warning}");
+        }
+
+        let scaled_sessions = scale_sessions_by_class(&profile, &class_scales, args.stagger_ms);
+
+        println!("Per-category scaling:");
+        for (class, scale) in &class_scales {
+            println!("  {:?}: {}x", class, scale);
+        }
+        println!(
+            "Scaled workload: {} original sessions -> {} total",
+            profile.sessions.len(),
+            scaled_sessions.len(),
+        );
+
+        let mut scaled = profile.clone();
+        scaled.sessions = scaled_sessions;
+        scaled.metadata.total_sessions = scaled.sessions.len() as u64;
+        scaled.metadata.total_queries =
+            scaled.sessions.iter().map(|s| s.queries.len() as u64).sum();
+        scaled
+    } else if args.scale > 1 {
         if let Some(warning) = check_write_safety(&profile) {
             println!("{warning}");
         }
@@ -290,6 +336,156 @@ fn cmd_ab(args: pg_retest::cli::ABArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_web(args: pg_retest::cli::WebArgs) -> Result<()> {
+    use pg_retest::web;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(web::run_server(args.port, args.data_dir))
+}
+
+fn cmd_transform(args: pg_retest::cli::TransformArgs) -> Result<()> {
+    use pg_retest::cli::TransformAction;
+    use pg_retest::profile::io;
+    use pg_retest::transform::analyze::analyze_workload;
+
+    match args.action {
+        TransformAction::Analyze { workload, json } => {
+            let profile = io::read_profile(&workload)?;
+            let analysis = analyze_workload(&profile);
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&analysis)?);
+            } else {
+                println!("Workload Analysis");
+                println!("=================");
+                println!(
+                    "  Queries: {}  Sessions: {}  Duration: {:.1}s",
+                    analysis.profile_summary.total_queries,
+                    analysis.profile_summary.total_sessions,
+                    analysis.profile_summary.capture_duration_s,
+                );
+                println!();
+                println!(
+                    "Query Groups ({} identified, {} ungrouped):",
+                    analysis.query_groups.len(),
+                    analysis.ungrouped_queries
+                );
+                for group in &analysis.query_groups {
+                    println!();
+                    println!(
+                        "  Group {}: {} queries ({:.1}%)",
+                        group.id, group.query_count, group.pct_of_total
+                    );
+                    println!("    Tables: {}", group.tables.join(", "));
+                    println!("    Sessions: {:?}", group.sessions);
+                    println!("    Avg latency: {}us", group.avg_duration_us);
+                    if !group.parameter_patterns.common_filters.is_empty() {
+                        println!(
+                            "    Filters: {}",
+                            group.parameter_patterns.common_filters.join(", ")
+                        );
+                    }
+                    println!("    Sample queries:");
+                    for sq in &group.sample_queries {
+                        println!("      - {sq}");
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        TransformAction::Plan {
+            workload,
+            prompt,
+            provider,
+            api_key,
+            api_url,
+            model,
+            output,
+            dry_run,
+        } => {
+            let profile = io::read_profile(&workload)?;
+            let analysis = analyze_workload(&profile);
+
+            if dry_run {
+                println!("Dry run — showing what AI would receive:");
+                println!();
+                println!("{}", serde_json::to_string_pretty(&analysis)?);
+                return Ok(());
+            }
+
+            let api_key = api_key
+                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "API key required. Use --api-key or set ANTHROPIC_API_KEY/OPENAI_API_KEY env var"
+                    )
+                })?;
+
+            use pg_retest::transform::planner::{create_planner, PlannerConfig};
+            let provider = provider.parse().map_err(|e: anyhow::Error| e)?;
+            let planner = create_planner(PlannerConfig {
+                provider,
+                api_key,
+                api_url,
+                model,
+            });
+
+            println!("Generating transform plan with {}...", planner.name());
+
+            let rt = tokio::runtime::Runtime::new()?;
+            let plan = rt.block_on(planner.generate_plan(&analysis, &prompt))?;
+
+            let toml_str = toml::to_string_pretty(&plan)?;
+            std::fs::write(&output, &toml_str)?;
+            println!("Plan written to {}", output.display());
+            println!();
+            println!("  Groups: {}", plan.groups.len());
+            println!("  Transforms: {}", plan.transforms.len());
+            println!();
+            println!("Review the plan, then apply:");
+            println!(
+                "  pg-retest transform apply --workload {} --plan {}",
+                workload.display(),
+                output.display()
+            );
+            Ok(())
+        }
+
+        TransformAction::Apply {
+            workload,
+            plan,
+            output,
+            seed,
+        } => {
+            let profile = io::read_profile(&workload)?;
+            let plan_str = std::fs::read_to_string(&plan)?;
+            let transform_plan: pg_retest::transform::plan::TransformPlan =
+                toml::from_str(&plan_str)?;
+
+            println!("Applying transform plan...");
+            println!("  Groups: {}", transform_plan.groups.len());
+            println!("  Transforms: {}", transform_plan.transforms.len());
+
+            let result =
+                pg_retest::transform::engine::apply_transform(&profile, &transform_plan, seed)?;
+
+            println!(
+                "  Result: {} sessions, {} queries (was: {} sessions, {} queries)",
+                result.metadata.total_sessions,
+                result.metadata.total_queries,
+                profile.metadata.total_sessions,
+                profile.metadata.total_queries
+            );
+
+            io::write_profile(&output, &result)?;
+            println!("Wrote transformed workload to {}", output.display());
+            Ok(())
+        }
+    }
 }
 
 fn parse_duration(s: &str) -> Result<std::time::Duration> {
