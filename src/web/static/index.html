@@ -163,6 +163,10 @@
                 <div x-show="page === 'pipeline'" x-data="pipelinePage()" x-init="load()">
                     <div id="pipeline-content"></div>
                 </div>
+                <!-- Tuning -->
+                <div x-show="page === 'tuning'" x-data="tuningPage()" x-init="load()" x-effect="if ($store.app.page === 'tuning') load()">
+                    <div id="tuning-content"></div>
+                </div>
                 <!-- Transform -->
                 <div x-show="page === 'transform'" x-data="transformPage()" x-init="load()" x-effect="if ($store.app.page === 'transform') load()">
                     <div id="transform-content"></div>
@@ -194,6 +198,7 @@
     <script src="/js/pages/compare.js"></script>
     <script src="/js/pages/pipeline.js"></script>
     <script src="/js/pages/transform.js"></script>
+    <script src="/js/pages/tuning.js"></script>
     <script src="/js/pages/history.js"></script>
     <script src="/js/pages/help.js"></script>
     <script src="/js/app.js"></script>
