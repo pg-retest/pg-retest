@@ -70,6 +70,10 @@ pub fn build_router(state: AppState) -> Router {
             "/transform/apply",
             post(handlers::transform::apply_transform_handler),
         )
+        // Tuning
+        .route("/tuning/start", post(handlers::tuning::start_tuning))
+        .route("/tuning/{id}", get(handlers::tuning::get_tuning_status))
+        .route("/tuning/{id}/cancel", post(handlers::tuning::cancel_tuning))
         // Runs
         .route("/runs", get(handlers::runs::list_runs))
         .route("/runs/stats", get(handlers::runs::run_stats))

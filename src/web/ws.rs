@@ -77,6 +77,33 @@ pub enum WsMessage {
         run_id: String,
     },
 
+    // Tuning events
+    TuningIterationStarted {
+        task_id: String,
+        iteration: u32,
+    },
+    TuningRecommendations {
+        task_id: String,
+        iteration: u32,
+        count: usize,
+    },
+    TuningChangeApplied {
+        task_id: String,
+        iteration: u32,
+        success: bool,
+        summary: String,
+    },
+    TuningReplayCompleted {
+        task_id: String,
+        iteration: u32,
+        improvement_pct: f64,
+    },
+    TuningCompleted {
+        task_id: String,
+        total_improvement_pct: f64,
+        iterations_completed: u32,
+    },
+
     // General
     TaskStatusChanged {
         task_id: String,

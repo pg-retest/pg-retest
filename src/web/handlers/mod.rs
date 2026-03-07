@@ -5,6 +5,7 @@ pub mod proxy;
 pub mod replay;
 pub mod runs;
 pub mod transform;
+pub mod tuning;
 pub mod workloads;
 
 use axum::{extract::State, Json};

@@ -1,0 +1,110 @@
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::Json;
+use serde::Deserialize;
+
+use crate::web::state::AppState;
+use crate::web::ws::WsMessage;
+
+#[derive(Deserialize)]
+pub struct StartTuningRequest {
+    pub workload_id: String,
+    pub target: String,
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub api_url: Option<String>,
+    pub model: Option<String>,
+    pub max_iterations: Option<u32>,
+    pub hint: Option<String>,
+    pub apply: Option<bool>,
+    pub speed: Option<f64>,
+    pub read_only: Option<bool>,
+}
+
+pub async fn start_tuning(
+    State(state): State<AppState>,
+    Json(req): Json<StartTuningRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Check if tuning is already running
+    if state.tasks.has_running("tuning").await {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    // Resolve workload path
+    let wkl_path = state.data_dir.join("workloads").join(&req.workload_id);
+    if !wkl_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let config = crate::tuner::types::TuningConfig {
+        workload_path: wkl_path,
+        target: req.target.clone(),
+        provider: req.provider.unwrap_or_else(|| "claude".into()),
+        api_key: req.api_key,
+        api_url: req.api_url,
+        model: req.model,
+        max_iterations: req.max_iterations.unwrap_or(3),
+        hint: req.hint,
+        apply: req.apply.unwrap_or(false),
+        force: false, // Web UI never allows force
+        speed: req.speed.unwrap_or(1.0),
+        read_only: req.read_only.unwrap_or(false),
+    };
+
+    let state_clone = state.clone();
+    let task_id = state
+        .tasks
+        .clone()
+        .spawn(
+            "tuning",
+            &format!("Tune {}", req.workload_id),
+            move |_cancel, task_id| {
+                tokio::spawn(async move {
+                    match crate::tuner::run_tuning(&config).await {
+                        Ok(report) => {
+                            let total = report.total_improvement_pct;
+                            let iters = report.iterations.len() as u32;
+                            state_clone.broadcast(WsMessage::TuningCompleted {
+                                task_id,
+                                total_improvement_pct: total,
+                                iterations_completed: iters,
+                            });
+                        }
+                        Err(e) => {
+                            state_clone.broadcast(WsMessage::Error {
+                                message: format!("Tuning failed: {e}"),
+                            });
+                        }
+                    }
+                })
+            },
+        )
+        .await;
+
+    Ok(Json(serde_json::json!({ "task_id": task_id })))
+}
+
+pub async fn get_tuning_status(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.tasks.get(&id).await {
+        Some(info) => Ok(Json(serde_json::json!({
+            "task_id": info.id,
+            "status": if info.running { "running" } else { "completed" },
+            "label": info.label,
+        }))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+pub async fn cancel_tuning(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if state.tasks.cancel(&id).await {
+        Ok(Json(serde_json::json!({ "cancelled": true })))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
