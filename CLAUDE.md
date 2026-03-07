@@ -77,7 +77,13 @@ Key modules:
 - `transform::analyze` — Deterministic workload analyzer: `extract_tables()` (regex-based), `extract_filter_columns()`, `analyze_workload()` (Union-Find table grouping), produces `WorkloadAnalysis` for LLM context
 - `transform::engine` — Deterministic transform engine: `apply_transform()` applies a TransformPlan to a WorkloadProfile (weighted session duplication, query injection with seeded RNG, group removal)
 - `transform::planner` — Multi-provider LLM planner: `LlmPlanner` async trait with `ClaudePlanner` (tool_use), `OpenAiPlanner` (function_calling), `OllamaPlanner` (JSON mode). Direct HTTP via reqwest.
-- `cli` — Clap derive-based CLI argument structs (10 subcommands: capture, replay, compare, inspect, proxy, run, ab, web, transform)
+- `tuner` — AI-assisted tuning orchestrator (configurable loop: context → LLM → safety → apply → replay → compare)
+- `tuner::types` — Recommendation, TuningConfig, TuningIteration, TuningReport
+- `tuner::context` — PG introspection (pg_settings, schema, pg_stat_statements, EXPLAIN plans)
+- `tuner::advisor` — TuningAdvisor trait with Claude/OpenAI/Ollama providers
+- `tuner::safety` — Parameter allowlist, blocked operations, production hostname check
+- `tuner::apply` — Recommendation application with rollback tracking
+- `cli` — Clap derive-based CLI argument structs (11 subcommands: capture, replay, compare, inspect, proxy, run, ab, web, transform, tune)
 - `web` — Axum HTTP server + WebSocket dashboard (embedded static files via rust-embed, SQLite metadata via rusqlite)
 - `web::db` — SQLite schema + CRUD for workloads, runs, proxy_sessions, threshold_results
 - `web::state` — `AppState` (db, data_dir, ws_broadcast, task_manager)
@@ -92,6 +98,7 @@ Key modules:
 - `web::handlers::pipeline` — Pipeline config validation + execution
 - `web::handlers::runs` — Historical run listing, filtering, trends
 - `web::handlers::transform` — Transform API endpoints (analyze, plan, apply) for web dashboard
+- `web::handlers::tuning` — Tuning API endpoints (start, status, cancel) for web dashboard
 
 ## Milestone Status
 
@@ -100,9 +107,9 @@ Key modules:
 - **M3: CI/CD Integration** — Complete. TOML config (`pg-retest run --config .pg-retest.toml`), Docker provisioner via CLI subprocess, JUnit XML output, threshold evaluation, pipeline orchestrator with staged exit codes (0-5), A/B variant mode via `[[variants]]` in pipeline config.
 - **M4: Cross-Database Capture (MySQL)** — Complete. MySQL slow query log parser, composable SQL transform pipeline (regex-based: backticks, LIMIT, IFNULL, IF, UNIX_TIMESTAMP), CLI `--source-type mysql-slow`, pipeline config support.
 - **Gap Closure** — Complete. Per-category scaling, A/B variant testing (`pg-retest ab`), cloud-native capture from AWS RDS/Aurora (`--source-type rds`).
-- **Web Dashboard** — Complete. Axum + Alpine.js + Chart.js SPA (`pg-retest web --port 8080`). 10 pages: dashboard, workloads, proxy, replay, A/B, compare, pipeline, history, transform, help. WebSocket real-time updates. SQLite metadata storage.
+- **Web Dashboard** — Complete. Axum + Alpine.js + Chart.js SPA (`pg-retest web --port 8080`). 11 pages: dashboard, workloads, proxy, replay, A/B, compare, pipeline, history, transform, tuning, help. WebSocket real-time updates. SQLite metadata storage.
 - **Workload Transform** — Complete. AI-powered workload transformation (`pg-retest transform analyze|plan|apply`). 3-layer architecture: deterministic Analyzer (Union-Find table grouping), multi-provider LLM Planner (Claude/OpenAI/Ollama), deterministic Engine (weighted session duplication, query injection, group removal). TOML transform plans as intermediate artifact. Design at `docs/plans/2026-03-07-workload-transform-design.md`. 201 tests.
-- **M5: AI-Assisted Tuning** — Design complete (`docs/plans/2026-03-04-m5-ai-tuning-design.md`). Claude API integration, tuning loop, A/B variants.
+- **M5: AI-Assisted Tuning** — Complete. Multi-provider LLM tuning (`pg-retest tune`). Configurable loop: collect PG context → LLM recommendations → safety validation → apply → replay → compare → iterate. 4 recommendation types (config, index, query rewrite, schema). Safety allowlist (~41 safe PG params), production hostname check. Claude/OpenAI/Ollama providers. Dry-run default. Web dashboard tuning page. Design at `docs/plans/2026-03-07-m5-ai-tuning-design-v2.md`. 215 tests.
 
 ## Gotchas
 
@@ -127,6 +134,11 @@ Key modules:
 - Web dashboard: Background tasks (proxy, replay, pipeline) use `TaskManager` with `CancellationToken`. WebSocket broadcast channel pushes events to all connected clients.
 - Web dashboard: Frontend uses Alpine.js (reactivity), Chart.js (graphs), Tailwind CSS (styling) all via CDN — no build step required.
 - Web dashboard: Uses `OnceLock<Arc<RwLock<ProxyState>>>` for proxy state tracking (module-level static).
+- Tuner: default is dry-run (`--apply` required to execute). Safety allowlist blocks ~50 dangerous PG params.
+- Tuner: baseline is collected via replay before any tuning iteration (comparison is always vs. baseline, not vs. source timing).
+- Tuner: `pg_stat_statements` is optional — if the extension isn't installed, `stat_statements` will be `None`.
+- Tuner: EXPLAIN is only run for SELECT queries without bind parameters (queries with `$1` are skipped).
+- Tuner: production hostname check blocks targets containing "prod", "production", "primary", "master", "main" without `--force`.
 - Transform: `extract_tables()` groups tables by co-occurrence within a single SQL statement (Union-Find), not by session co-occurrence. Two tables in separate queries won't be grouped unless a third query touches both.
 - Transform: The engine's Remove operation uses `query_indices` from the plan's group definition to identify which queries to remove. Empty `query_indices` means nothing is removed.
 - Transform: Transform plans are TOML files with `#[serde(tag = "type")]` on `TransformRule` enum. The `type` field must be `scale`, `inject`, `inject_session`, or `remove`.
