@@ -152,7 +152,11 @@ fn test_full_transform_pipeline() {
             .query_groups
             .iter()
             .map(|g| QueryGroup {
-                name: g.tables.first().cloned().unwrap_or_else(|| "unknown".into()),
+                name: g
+                    .tables
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".into()),
                 description: format!("Queries touching {}", g.tables.join(", ")),
                 tables: g.tables.clone(),
                 query_indices: vec![],
