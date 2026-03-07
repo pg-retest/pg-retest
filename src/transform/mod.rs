@@ -1,4 +1,5 @@
 pub mod mysql_to_pg;
+pub mod plan;
 
 /// Result of transforming a single SQL statement.
 #[derive(Debug, Clone, PartialEq)]
