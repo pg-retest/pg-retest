@@ -247,7 +247,20 @@ impl LlmPlanner for OpenAiPlanner {
     ) -> Result<TransformPlan> {
         let client = reqwest::Client::new();
         let function_def = tool_schema();
-        let body = json!({
+
+        // Newer OpenAI models (gpt-5, o-series) use max_completion_tokens;
+        // older models (gpt-4o, gpt-4) use max_tokens
+        let uses_new_param = self.model.starts_with("gpt-5")
+            || self.model.starts_with("o1")
+            || self.model.starts_with("o3")
+            || self.model.starts_with("o4");
+        let token_key = if uses_new_param {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+
+        let mut body = json!({
             "model": self.model,
             "messages": [
                 { "role": "system", "content": build_system_prompt() },
@@ -256,6 +269,7 @@ impl LlmPlanner for OpenAiPlanner {
             "tools": [{ "type": "function", "function": function_def }],
             "tool_choice": { "type": "function", "function": { "name": "generate_transform_plan" } }
         });
+        body[token_key] = json!(4096);
 
         let resp = client
             .post(format!("{}/v1/chat/completions", self.api_url))
