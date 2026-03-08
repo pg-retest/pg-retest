@@ -235,7 +235,9 @@ function tuningPage() {
                                     <select class="input" id="tuning-provider" onchange="tuningProviderChanged(this.value)">
                                         <option value="claude">Claude</option>
                                         <option value="openai">OpenAI</option>
-                                        <option value="ollama">Ollama</option>
+                                        <option value="gemini">Google Gemini</option>
+                                        <option value="bedrock">AWS Bedrock</option>
+                                        <option value="ollama">Ollama (Local)</option>
                                     </select>
                                 </div>
                             </div>
@@ -347,10 +349,18 @@ function tuningProviderChanged(value) {
     const urlRow = document.getElementById('tuning-api-url-row');
     const apiKeyInput = document.getElementById('tuning-api-key');
     const modelInput = document.getElementById('tuning-model');
-    if (urlRow) urlRow.classList.toggle('hidden', value !== 'ollama');
-    if (apiKeyInput) apiKeyInput.placeholder = value === 'ollama' ? 'Not required' : 'sk-...';
+    const showUrl = value === 'ollama' || value === 'bedrock';
+    if (urlRow) urlRow.classList.toggle('hidden', !showUrl);
+    const noKeyProviders = ['ollama', 'bedrock'];
+    if (apiKeyInput) apiKeyInput.placeholder = noKeyProviders.includes(value) ? 'Not required' : (value === 'gemini' ? 'AIza...' : 'sk-...');
     if (modelInput) {
-        const placeholders = { claude: 'claude-sonnet-4-20250514', openai: 'gpt-4o', ollama: 'llama3.1' };
+        const placeholders = {
+            claude: 'claude-sonnet-4-20250514',
+            openai: 'gpt-5-mini',
+            gemini: 'gemini-2.5-flash',
+            bedrock: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+            ollama: 'llama3.1',
+        };
         modelInput.placeholder = placeholders[value] || '';
     }
 }
@@ -374,7 +384,7 @@ async function startTuning() {
     const apply = document.getElementById('tuning-apply').checked;
     const readOnly = document.getElementById('tuning-readonly').checked;
 
-    if (provider !== 'ollama' && !apiKey) {
+    if (!['ollama', 'bedrock'].includes(provider) && !apiKey) {
         window.showToast('API key is required', 'error');
         return;
     }

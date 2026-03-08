@@ -44,6 +44,7 @@ function historyPage() {
                                 <option value="replay">Replay</option>
                                 <option value="ab">A/B Test</option>
                                 <option value="pipeline">Pipeline</option>
+                                <option value="tuning">Tuning</option>
                             </select>
                         </div>
                     </div>
@@ -111,10 +112,13 @@ async function viewRunDetail(id) {
     const run = res.run;
     const report = res.report;
 
+    // Check if this is a tuning run with a tuning-specific report
+    const isTuning = run.run_type === 'tuning' && report && report.iterations;
+
     content.innerHTML = `
         <div class="space-y-4">
             <div class="flex items-center justify-between">
-                <h3 class="text-base font-semibold">Run Details</h3>
+                <h3 class="text-base font-semibold">${isTuning ? 'Tuning Report' : 'Run Details'}</h3>
                 <button class="btn btn-secondary btn-sm" onclick="closeHistoryDetail()">Close</button>
             </div>
 
@@ -128,8 +132,11 @@ async function viewRunDetail(id) {
                     <div>${Tables.statusBadge(run.status)}</div>
                 </div>
                 <div class="card">
-                    <div class="text-xs text-slate-500 uppercase mb-1">Exit Code</div>
-                    <div>${Tables.exitCodeBadge(run.exit_code)}</div>
+                    <div class="text-xs text-slate-500 uppercase mb-1">${isTuning ? 'Improvement' : 'Exit Code'}</div>
+                    <div>${isTuning
+                        ? `<span class="font-mono text-sm ${report.total_improvement_pct > 0 ? 'text-accent' : 'text-danger'}">${report.total_improvement_pct > 0 ? '+' : ''}${report.total_improvement_pct.toFixed(1)}%</span>`
+                        : Tables.exitCodeBadge(run.exit_code)
+                    }</div>
                 </div>
             </div>
 
@@ -140,6 +147,15 @@ async function viewRunDetail(id) {
             </div>
             ` : ''}
 
+            ${isTuning && report.hint ? `
+            <div class="card">
+                <div class="text-xs text-slate-500 uppercase mb-1">Hint</div>
+                <div class="text-sm text-slate-300">${report.hint}</div>
+            </div>
+            ` : ''}
+
+            ${isTuning ? renderTuningIterations(report) : ''}
+
             ${run.error_message ? `
             <div class="card border-danger/30">
                 <div class="text-xs text-slate-500 uppercase mb-1">Error</div>
@@ -147,7 +163,7 @@ async function viewRunDetail(id) {
             </div>
             ` : ''}
 
-            ${report ? `
+            ${report && !isTuning ? `
             <div class="card">
                 <h4 class="section-title mb-3">Report</h4>
                 <div class="chart-container">
@@ -158,9 +174,58 @@ async function viewRunDetail(id) {
         </div>
     `;
 
-    if (report) {
+    if (report && !isTuning) {
         setTimeout(() => Charts.createLatencyChart('detail-latency-chart', report), 100);
     }
+}
+
+function renderTuningIterations(report) {
+    if (!report.iterations || report.iterations.length === 0) return '';
+
+    let html = '<div class="space-y-3">';
+    for (const iter of report.iterations) {
+        const comp = iter.comparison;
+        const improvementHtml = comp
+            ? `<span class="font-mono text-xs ${comp.p95_change_pct < 0 ? 'text-accent' : comp.p95_change_pct > 0 ? 'text-danger' : 'text-slate-400'}">p95: ${comp.p95_change_pct > 0 ? '+' : ''}${comp.p95_change_pct.toFixed(1)}%</span>`
+            : '';
+
+        const successCount = iter.applied ? iter.applied.filter(a => a.success).length : 0;
+        const failCount = iter.applied ? iter.applied.filter(a => !a.success).length : 0;
+
+        html += `
+            <div class="card border-slate-700/30">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-semibold text-slate-200">Iteration ${iter.iteration}</span>
+                    ${improvementHtml}
+                </div>
+                <div class="text-xs text-slate-500 mb-2">
+                    ${iter.recommendations.length} recommendations | ${successCount} applied${failCount > 0 ? ` | ${failCount} failed` : ''}
+                </div>
+                <div class="space-y-1">
+        `;
+
+        for (const rec of iter.recommendations) {
+            const type = rec.type;
+            const badge = type === 'config_change' ? 'badge-info' :
+                          type === 'create_index' ? 'badge-warning' :
+                          type === 'query_rewrite' ? 'badge-neutral' : 'badge-secondary';
+            const label = type === 'config_change' ? `${rec.parameter} = ${rec.recommended_value}` :
+                          type === 'create_index' ? `Index on ${rec.table} (${rec.columns.join(', ')})` :
+                          type === 'query_rewrite' ? 'Query rewrite' :
+                          rec.description || 'Schema change';
+
+            html += `
+                <div class="flex items-center gap-2 text-xs">
+                    <span class="badge ${badge}">${type.replace('_', ' ')}</span>
+                    <span class="text-slate-300 truncate">${label}</span>
+                </div>
+            `;
+        }
+
+        html += '</div></div>';
+    }
+    html += '</div>';
+    return html;
 }
 
 function closeHistoryDetail() {

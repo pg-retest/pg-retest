@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 
+use crate::tuner::types::TuningEvent;
 use crate::web::db;
 use crate::web::state::AppState;
 use crate::web::ws::WsMessage;
@@ -63,7 +64,80 @@ pub async fn start_tuning(
             move |_cancel, task_id| {
                 let workload_id_clone = workload_id_clone;
                 tokio::spawn(async move {
-                    match crate::tuner::run_tuning(&config).await {
+                    // Create event channel for per-iteration progress
+                    let (events_tx, mut events_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<TuningEvent>();
+
+                    let state_for_events = state_clone.clone();
+                    let task_id_for_events = task_id.clone();
+
+                    // Spawn event consumer that broadcasts WS messages
+                    let events_handle = tokio::spawn(async move {
+                        while let Some(event) = events_rx.recv().await {
+                            let msg = match event {
+                                TuningEvent::BaselineStarted => WsMessage::TuningIterationStarted {
+                                    task_id: task_id_for_events.clone(),
+                                    iteration: 0,
+                                },
+                                TuningEvent::IterationStarted {
+                                    iteration,
+                                    max_iterations: _,
+                                } => WsMessage::TuningIterationStarted {
+                                    task_id: task_id_for_events.clone(),
+                                    iteration,
+                                },
+                                TuningEvent::RecommendationsReceived {
+                                    iteration,
+                                    recommendations,
+                                } => WsMessage::TuningRecommendations {
+                                    task_id: task_id_for_events.clone(),
+                                    iteration,
+                                    count: recommendations.len(),
+                                },
+                                TuningEvent::ChangeApplied {
+                                    iteration,
+                                    change,
+                                } => {
+                                    let summary = match &change.recommendation {
+                                        crate::tuner::types::Recommendation::ConfigChange {
+                                            parameter,
+                                            recommended_value,
+                                            ..
+                                        } => format!("{} = {}", parameter, recommended_value),
+                                        crate::tuner::types::Recommendation::CreateIndex {
+                                            table,
+                                            columns,
+                                            ..
+                                        } => format!("index on {}.{}", table, columns.join(",")),
+                                        crate::tuner::types::Recommendation::QueryRewrite {
+                                            ..
+                                        } => "query rewrite".into(),
+                                        crate::tuner::types::Recommendation::SchemaChange {
+                                            description,
+                                            ..
+                                        } => description.clone(),
+                                    };
+                                    WsMessage::TuningChangeApplied {
+                                        task_id: task_id_for_events.clone(),
+                                        iteration,
+                                        success: change.success,
+                                        summary,
+                                    }
+                                }
+                                TuningEvent::ReplayCompleted {
+                                    iteration,
+                                    comparison,
+                                } => WsMessage::TuningReplayCompleted {
+                                    task_id: task_id_for_events.clone(),
+                                    iteration,
+                                    improvement_pct: -comparison.p95_change_pct,
+                                },
+                            };
+                            state_for_events.broadcast(msg);
+                        }
+                    });
+
+                    match crate::tuner::run_tuning_with_events(&config, Some(events_tx)).await {
                         Ok(report) => {
                             let total = report.total_improvement_pct;
                             let iters = report.iterations.len() as u32;
@@ -120,6 +194,9 @@ pub async fn start_tuning(
                             });
                         }
                     }
+
+                    // Wait for event consumer to finish
+                    let _ = events_handle.await;
                 })
             },
         )

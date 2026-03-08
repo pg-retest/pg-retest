@@ -21,6 +21,19 @@ use self::types::*;
 /// If `config.apply` is false (dry-run), only the first iteration's
 /// recommendations are generated and printed — nothing is applied.
 pub async fn run_tuning(config: &TuningConfig) -> Result<TuningReport> {
+    run_tuning_with_events(config, None).await
+}
+
+/// Run the tuning loop with an optional event channel for progress reporting.
+pub async fn run_tuning_with_events(
+    config: &TuningConfig,
+    events_tx: Option<tokio::sync::mpsc::UnboundedSender<TuningEvent>>,
+) -> Result<TuningReport> {
+    let send_event = |event: TuningEvent| {
+        if let Some(ref tx) = events_tx {
+            let _ = tx.send(event);
+        }
+    };
     // 1. Safety: check production hostname
     check_production_hostname(&config.target, config.force)?;
 
@@ -60,6 +73,7 @@ pub async fn run_tuning(config: &TuningConfig) -> Result<TuningReport> {
     };
 
     println!("  Collecting baseline replay...");
+    send_event(TuningEvent::BaselineStarted);
     let baseline_results =
         replay::session::run_replay(&profile, &config.target, replay_mode, config.speed).await?;
 
@@ -73,6 +87,10 @@ pub async fn run_tuning(config: &TuningConfig) -> Result<TuningReport> {
             "\n  === Tuning Iteration {}/{} ===",
             i, config.max_iterations
         );
+        send_event(TuningEvent::IterationStarted {
+            iteration: i,
+            max_iterations: config.max_iterations,
+        });
 
         // Collect context (re-collect each iteration to see impact of changes)
         println!("  Collecting PG context...");
@@ -95,6 +113,10 @@ pub async fn run_tuning(config: &TuningConfig) -> Result<TuningReport> {
         }
 
         println!("  Received {} recommendations:", recommendations.len());
+        send_event(TuningEvent::RecommendationsReceived {
+            iteration: i,
+            recommendations: recommendations.clone(),
+        });
         for (j, rec) in recommendations.iter().enumerate() {
             print_recommendation(j + 1, rec);
         }
@@ -142,6 +164,10 @@ pub async fn run_tuning(config: &TuningConfig) -> Result<TuningReport> {
         println!("  Applied: {} success, {} failed", successes, failures);
 
         for a in &applied {
+            send_event(TuningEvent::ChangeApplied {
+                iteration: i,
+                change: a.clone(),
+            });
             if !a.success {
                 println!(
                     "    FAILED: {} — {}",
@@ -196,6 +222,10 @@ pub async fn run_tuning(config: &TuningConfig) -> Result<TuningReport> {
             "  Results: p50={:+.1}%, p95={:+.1}%, p99={:+.1}%",
             comparison.p50_change_pct, comparison.p95_change_pct, comparison.p99_change_pct
         );
+        send_event(TuningEvent::ReplayCompleted {
+            iteration: i,
+            comparison: comparison.clone(),
+        });
 
         // Build feedback for next iteration
         let feedback = format!(

@@ -83,6 +83,21 @@ pub struct TuningConfig {
     pub read_only: bool,
 }
 
+/// Events emitted during tuning for real-time progress reporting.
+#[derive(Debug, Clone)]
+pub enum TuningEvent {
+    /// Baseline replay started.
+    BaselineStarted,
+    /// A new iteration has started.
+    IterationStarted { iteration: u32, max_iterations: u32 },
+    /// LLM returned recommendations.
+    RecommendationsReceived { iteration: u32, recommendations: Vec<Recommendation> },
+    /// A single change was applied (success or failure).
+    ChangeApplied { iteration: u32, change: AppliedChange },
+    /// Replay after changes completed with comparison.
+    ReplayCompleted { iteration: u32, comparison: ComparisonSummary },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
