@@ -22,6 +22,7 @@ pub enum LlmProvider {
     Claude,
     OpenAi,
     Gemini,
+    Bedrock,
     Ollama,
 }
 
@@ -33,9 +34,10 @@ impl std::str::FromStr for LlmProvider {
             "claude" | "anthropic" => Ok(Self::Claude),
             "openai" | "gpt" => Ok(Self::OpenAi),
             "gemini" | "google" => Ok(Self::Gemini),
+            "bedrock" | "aws" => Ok(Self::Bedrock),
             "ollama" | "local" => Ok(Self::Ollama),
             other => {
-                anyhow::bail!("Unknown LLM provider: {other}. Supported: claude, openai, gemini, ollama")
+                anyhow::bail!("Unknown LLM provider: {other}. Supported: claude, openai, gemini, bedrock, ollama")
             }
         }
     }
@@ -76,6 +78,12 @@ pub fn create_planner(config: PlannerConfig) -> Box<dyn LlmPlanner> {
             model: config
                 .model
                 .unwrap_or_else(|| "gemini-2.5-flash".into()),
+        }),
+        LlmProvider::Bedrock => Box::new(BedrockPlanner {
+            model: config
+                .model
+                .unwrap_or_else(|| "us.anthropic.claude-sonnet-4-20250514-v1:0".into()),
+            region: config.api_url, // reuse api_url as AWS region override
         }),
         LlmProvider::Ollama => Box::new(OllamaPlanner {
             api_url: config
@@ -395,6 +403,85 @@ impl LlmPlanner for GeminiPlanner {
     }
 }
 
+// -- Bedrock Provider (via AWS CLI) -------------------------------------------
+
+struct BedrockPlanner {
+    model: String,
+    region: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl LlmPlanner for BedrockPlanner {
+    async fn generate_plan(
+        &self,
+        analysis: &WorkloadAnalysis,
+        prompt: &str,
+    ) -> Result<TransformPlan> {
+        let schema = tool_schema();
+        let tool_config = json!({
+            "tools": [{
+                "toolSpec": {
+                    "name": schema["name"],
+                    "description": schema["description"],
+                    "inputSchema": { "json": schema["input_schema"] }
+                }
+            }],
+            "toolChoice": { "any": {} }
+        });
+
+        let messages = json!([{
+            "role": "user",
+            "content": [{
+                "text": format!("{}\n\n{}", build_system_prompt(), build_user_message(analysis, prompt))
+            }]
+        }]);
+
+        let mut cmd = tokio::process::Command::new("aws");
+        cmd.arg("bedrock-runtime")
+            .arg("converse")
+            .arg("--model-id")
+            .arg(&self.model)
+            .arg("--messages")
+            .arg(messages.to_string())
+            .arg("--tool-config")
+            .arg(tool_config.to_string())
+            .arg("--output")
+            .arg("json");
+
+        if let Some(ref region) = self.region {
+            cmd.arg("--region").arg(region);
+        }
+
+        let output = cmd.output().await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("AWS Bedrock CLI error: {stderr}");
+        }
+
+        let resp: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+
+        // Bedrock Converse returns tool use in output.content[]
+        let content = resp["output"]["message"]["content"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("No content in Bedrock response"))?;
+
+        for block in content {
+            if let Some(tool_use) = block.get("toolUse") {
+                let input = &tool_use["input"];
+                let plan: TransformPlan = serde_json::from_value(input.clone())?;
+                return Ok(plan);
+            }
+        }
+
+        anyhow::bail!("No toolUse in Bedrock response")
+    }
+
+    fn name(&self) -> &str {
+        "bedrock"
+    }
+}
+
 // -- Ollama Provider ----------------------------------------------------------
 
 struct OllamaPlanner {
@@ -507,6 +594,14 @@ mod tests {
             LlmProvider::Gemini
         ));
         assert!(matches!(
+            "bedrock".parse::<LlmProvider>().unwrap(),
+            LlmProvider::Bedrock
+        ));
+        assert!(matches!(
+            "aws".parse::<LlmProvider>().unwrap(),
+            LlmProvider::Bedrock
+        ));
+        assert!(matches!(
             "ollama".parse::<LlmProvider>().unwrap(),
             LlmProvider::Ollama
         ));
@@ -538,6 +633,14 @@ mod tests {
             model: None,
         });
         assert_eq!(planner.name(), "gemini");
+
+        let planner = create_planner(PlannerConfig {
+            provider: LlmProvider::Bedrock,
+            api_key: String::new(),
+            api_url: None,
+            model: None,
+        });
+        assert_eq!(planner.name(), "bedrock");
 
         let planner = create_planner(PlannerConfig {
             provider: LlmProvider::Ollama,

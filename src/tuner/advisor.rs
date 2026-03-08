@@ -69,6 +69,15 @@ pub fn create_advisor(config: AdvisorConfig) -> Box<dyn TuningAdvisor> {
                 base_url: url,
             })
         }
+        LlmProvider::Bedrock => {
+            let model = config
+                .model
+                .unwrap_or_else(|| "us.anthropic.claude-sonnet-4-20250514-v1:0".into());
+            Box::new(BedrockAdvisor {
+                model,
+                region: config.api_url, // reuse api_url as region override
+            })
+        }
         LlmProvider::Ollama => {
             let model = config.model.unwrap_or_else(|| "llama3".into());
             let url = config
@@ -496,6 +505,97 @@ impl TuningAdvisor for GeminiAdvisor {
 
     fn name(&self) -> &str {
         "Gemini"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bedrock Advisor (via AWS CLI)
+// ---------------------------------------------------------------------------
+
+struct BedrockAdvisor {
+    model: String,
+    region: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl TuningAdvisor for BedrockAdvisor {
+    async fn recommend(
+        &self,
+        context: &PgContext,
+        workload: &WorkloadAnalysis,
+        hint: Option<&str>,
+        previous: &[TuningIteration],
+    ) -> Result<Vec<Recommendation>> {
+        let tools_array = tool_schema();
+        let tool_specs: Vec<serde_json::Value> = tools_array
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("tool_schema did not return an array"))?
+            .iter()
+            .map(|t| {
+                json!({
+                    "toolSpec": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "inputSchema": { "json": t["input_schema"] }
+                    }
+                })
+            })
+            .collect();
+
+        let tool_config = json!({
+            "tools": tool_specs
+        });
+
+        let messages = json!([{
+            "role": "user",
+            "content": [{
+                "text": format!("{}\n\n{}", build_system_prompt(), build_user_message(context, workload, hint, previous))
+            }]
+        }]);
+
+        let mut cmd = tokio::process::Command::new("aws");
+        cmd.arg("bedrock-runtime")
+            .arg("converse")
+            .arg("--model-id")
+            .arg(&self.model)
+            .arg("--messages")
+            .arg(messages.to_string())
+            .arg("--tool-config")
+            .arg(tool_config.to_string())
+            .arg("--output")
+            .arg("json");
+
+        if let Some(ref region) = self.region {
+            cmd.arg("--region").arg(region);
+        }
+
+        let output = cmd.output().await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("AWS Bedrock CLI error: {stderr}");
+        }
+
+        let resp: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let mut recs = Vec::new();
+
+        if let Some(content) = resp["output"]["message"]["content"].as_array() {
+            for block in content {
+                if let Some(tool_use) = block.get("toolUse") {
+                    if let Some(name) = tool_use["name"].as_str() {
+                        if let Some(rec) = parse_tool_call(name, &tool_use["input"]) {
+                            recs.push(rec);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(recs)
+    }
+
+    fn name(&self) -> &str {
+        "Bedrock"
     }
 }
 

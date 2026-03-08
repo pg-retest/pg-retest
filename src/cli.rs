@@ -280,7 +280,7 @@ pub enum TransformAction {
         #[arg(long)]
         prompt: String,
 
-        /// LLM provider: claude, openai, gemini, ollama
+        /// LLM provider: claude, openai, gemini, bedrock, ollama
         #[arg(long, default_value = "claude")]
         provider: String,
 
@@ -335,7 +335,7 @@ pub struct TuneArgs {
     #[arg(long)]
     pub target: String,
 
-    /// LLM provider: claude, openai, gemini, ollama
+    /// LLM provider: claude, openai, gemini, bedrock, ollama
     #[arg(long, default_value = "claude")]
     pub provider: String,
 
