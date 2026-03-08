@@ -269,7 +269,7 @@ impl TuningAdvisor for ClaudeAdvisor {
         previous: &[TuningIteration],
     ) -> Result<Vec<Recommendation>> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
 
         let body = json!({
@@ -338,7 +338,7 @@ impl TuningAdvisor for OpenAiAdvisor {
         previous: &[TuningIteration],
     ) -> Result<Vec<Recommendation>> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
 
         let schema = tool_schema();
@@ -440,7 +440,7 @@ impl TuningAdvisor for GeminiAdvisor {
         previous: &[TuningIteration],
     ) -> Result<Vec<Recommendation>> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
 
         let tools_array = tool_schema();
