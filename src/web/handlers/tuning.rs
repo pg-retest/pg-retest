@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 
+use crate::web::db;
 use crate::web::state::AppState;
 use crate::web::ws::WsMessage;
 
@@ -52,6 +53,7 @@ pub async fn start_tuning(
     };
 
     let state_clone = state.clone();
+    let workload_id_clone = req.workload_id.clone();
     let task_id = state
         .tasks
         .clone()
@@ -59,11 +61,53 @@ pub async fn start_tuning(
             "tuning",
             &format!("Tune {}", req.workload_id),
             move |_cancel, task_id| {
+                let workload_id_clone = workload_id_clone;
                 tokio::spawn(async move {
                     match crate::tuner::run_tuning(&config).await {
                         Ok(report) => {
                             let total = report.total_improvement_pct;
                             let iters = report.iterations.len() as u32;
+
+                            // Persist report to SQLite
+                            let report_id = uuid::Uuid::new_v4().to_string();
+                            if let Ok(report_json) = serde_json::to_string(&report) {
+                                let row = db::TuningReportRow {
+                                    id: report_id.clone(),
+                                    run_id: Some(task_id.clone()),
+                                    workload_id: Some(workload_id_clone),
+                                    target: report.target.clone(),
+                                    provider: report.provider.clone(),
+                                    hint: report.hint.clone(),
+                                    iterations: iters as i64,
+                                    total_improvement_pct: total,
+                                    report_json: report_json.clone(),
+                                    created_at: None,
+                                };
+                                let conn = state_clone.db.lock().await;
+                                let _ = db::insert_tuning_report(&conn, &row);
+
+                                // Also create a run entry for history tracking
+                                let run = db::RunRow {
+                                    id: task_id.clone(),
+                                    run_type: "tuning".into(),
+                                    status: "completed".into(),
+                                    workload_id: row.workload_id.clone(),
+                                    config_json: None,
+                                    started_at: None,
+                                    finished_at: Some(chrono::Utc::now().to_rfc3339()),
+                                    target_conn: Some(report.target.clone()),
+                                    replay_mode: None,
+                                    speed: None,
+                                    scale: None,
+                                    results_path: None,
+                                    report_json: Some(report_json),
+                                    exit_code: Some(0),
+                                    error_message: None,
+                                    created_at: None,
+                                };
+                                let _ = db::insert_run(&conn, &run);
+                            }
+
                             state_clone.broadcast(WsMessage::TuningCompleted {
                                 task_id,
                                 total_improvement_pct: total,
@@ -106,5 +150,27 @@ pub async fn cancel_tuning(
         Ok(Json(serde_json::json!({ "cancelled": true })))
     } else {
         Err(StatusCode::NOT_FOUND)
+    }
+}
+
+pub async fn list_tuning_reports(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<db::TuningReportRow>>, StatusCode> {
+    let conn = state.db.lock().await;
+    match db::list_tuning_reports(&conn, None) {
+        Ok(reports) => Ok(Json(reports)),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+pub async fn get_tuning_report(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<db::TuningReportRow>, StatusCode> {
+    let conn = state.db.lock().await;
+    match db::get_tuning_report(&conn, &id) {
+        Ok(Some(report)) => Ok(Json(report)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }

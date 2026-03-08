@@ -72,6 +72,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Tuning
         .route("/tuning/start", post(handlers::tuning::start_tuning))
+        .route("/tuning/reports", get(handlers::tuning::list_tuning_reports))
+        .route("/tuning/reports/{id}", get(handlers::tuning::get_tuning_report))
         .route("/tuning/{id}", get(handlers::tuning::get_tuning_status))
         .route("/tuning/{id}/cancel", post(handlers::tuning::cancel_tuning))
         // Runs

@@ -57,6 +57,19 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             actual REAL NOT NULL,
             threshold_limit REAL NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS tuning_reports (
+            id TEXT PRIMARY KEY,
+            run_id TEXT,
+            workload_id TEXT,
+            target TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            hint TEXT,
+            iterations INTEGER NOT NULL DEFAULT 0,
+            total_improvement_pct REAL NOT NULL DEFAULT 0.0,
+            report_json TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         ",
     )?;
     Ok(())
@@ -515,6 +528,92 @@ pub fn list_threshold_results(conn: &Connection, run_id: &str) -> Result<Vec<Thr
     Ok(rows)
 }
 
+// ── Tuning Report CRUD ──────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TuningReportRow {
+    pub id: String,
+    pub run_id: Option<String>,
+    pub workload_id: Option<String>,
+    pub target: String,
+    pub provider: String,
+    pub hint: Option<String>,
+    pub iterations: i64,
+    pub total_improvement_pct: f64,
+    pub report_json: String,
+    pub created_at: Option<String>,
+}
+
+pub fn insert_tuning_report(conn: &Connection, r: &TuningReportRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO tuning_reports (id, run_id, workload_id, target, provider, hint,
+         iterations, total_improvement_pct, report_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            r.id,
+            r.run_id,
+            r.workload_id,
+            r.target,
+            r.provider,
+            r.hint,
+            r.iterations,
+            r.total_improvement_pct,
+            r.report_json,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_tuning_report(conn: &Connection, id: &str) -> Result<Option<TuningReportRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, workload_id, target, provider, hint,
+         iterations, total_improvement_pct, report_json, created_at
+         FROM tuning_reports WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map([id], |row| {
+        Ok(TuningReportRow {
+            id: row.get(0)?,
+            run_id: row.get(1)?,
+            workload_id: row.get(2)?,
+            target: row.get(3)?,
+            provider: row.get(4)?,
+            hint: row.get(5)?,
+            iterations: row.get(6)?,
+            total_improvement_pct: row.get(7)?,
+            report_json: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn list_tuning_reports(conn: &Connection, limit: Option<u32>) -> Result<Vec<TuningReportRow>> {
+    let limit = limit.unwrap_or(50);
+    let sql = format!(
+        "SELECT id, run_id, workload_id, target, provider, hint,
+         iterations, total_improvement_pct, report_json, created_at
+         FROM tuning_reports ORDER BY created_at DESC LIMIT {limit}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TuningReportRow {
+                id: row.get(0)?,
+                run_id: row.get(1)?,
+                workload_id: row.get(2)?,
+                target: row.get(3)?,
+                provider: row.get(4)?,
+                hint: row.get(5)?,
+                iterations: row.get(6)?,
+                total_improvement_pct: row.get(7)?,
+                report_json: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,5 +807,35 @@ mod tests {
         // Different run_id returns empty
         let other = list_threshold_results(&conn, "run-2").unwrap();
         assert!(other.is_empty());
+    }
+
+    #[test]
+    fn test_tuning_report_crud() {
+        let conn = test_db();
+
+        let report = TuningReportRow {
+            id: "tune-1".into(),
+            run_id: Some("run-1".into()),
+            workload_id: Some("wkl-1".into()),
+            target: "postgres://localhost/test".into(),
+            provider: "openai".into(),
+            hint: Some("focus on reads".into()),
+            iterations: 2,
+            total_improvement_pct: 15.5,
+            report_json: r#"{"iterations":[]}"#.into(),
+            created_at: None,
+        };
+
+        insert_tuning_report(&conn, &report).unwrap();
+
+        let got = get_tuning_report(&conn, "tune-1").unwrap().unwrap();
+        assert_eq!(got.provider, "openai");
+        assert_eq!(got.iterations, 2);
+        assert!((got.total_improvement_pct - 15.5).abs() < f64::EPSILON);
+
+        let all = list_tuning_reports(&conn, None).unwrap();
+        assert_eq!(all.len(), 1);
+
+        assert!(get_tuning_report(&conn, "tune-999").unwrap().is_none());
     }
 }

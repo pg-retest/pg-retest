@@ -74,20 +74,38 @@ pub async fn apply_recommendation(client: &Client, rec: &Recommendation) -> Appl
             }
         }
 
-        Recommendation::SchemaChange { sql, .. } => match execute_sql(client, sql).await {
-            Ok(()) => AppliedChange {
-                recommendation: rec.clone(),
-                success: true,
-                error: None,
-                rollback_sql: None,
-            },
-            Err(e) => AppliedChange {
-                recommendation: rec.clone(),
-                success: false,
-                error: Some(format!("Schema change failed: {}", e)),
-                rollback_sql: None,
-            },
-        },
+        Recommendation::SchemaChange { sql, .. } => {
+            // Split multi-statement SQL and execute each individually
+            // so we get per-statement error reporting and partial success.
+            let statements: Vec<&str> = sql
+                .split(';')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let mut errors = Vec::new();
+            for stmt in &statements {
+                if let Err(e) = execute_sql(client, stmt).await {
+                    errors.push(format!("{}: {}", stmt, e));
+                }
+            }
+
+            if errors.is_empty() {
+                AppliedChange {
+                    recommendation: rec.clone(),
+                    success: true,
+                    error: None,
+                    rollback_sql: None,
+                }
+            } else {
+                AppliedChange {
+                    recommendation: rec.clone(),
+                    success: false,
+                    error: Some(errors.join("; ")),
+                    rollback_sql: None,
+                }
+            }
+        }
     }
 }
 
