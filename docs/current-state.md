@@ -33,7 +33,7 @@ pie title Feature Completion
 | Test code (tests/) | ~3,300 lines |
 | Integration test files | 20 |
 | Unit test modules | 19 |
-| **Total tests** | **216** |
+| **Total tests** | **232** |
 | **Test pass rate** | **100%** |
 | **Clippy warnings** | **0** |
 | TODO/FIXME comments | 0 |
@@ -174,10 +174,12 @@ Test Coverage vs. Risk Matrix
 ━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━┿━━━━━━━━━━━━━━━━━━━━━━━━
   HIGH RISK         ┃ ⚠ NEEDS ATTENTION     │ ✅ WELL PROTECTED
   (core features,   ┃                       │
-   data integrity)  ┃ • Replay Engine E2E   │ • CSV Log Parser
-                    ┃ • Proxy Relay E2E     │ • PII Masking
-                    ┃ • LLM Integration     │ • Profile I/O
-                    ┃ • Tuner Context       │ • Comparison
+   data integrity)  ┃ • LLM Integration     │ • CSV Log Parser
+                    ┃ • Tuner Context       │ • PII Masking
+                    ┃                       │ • Profile I/O
+                    ┃                       │ • Comparison
+                    ┃                       │ • Replay Engine E2E ✓
+                    ┃                       │ • Proxy Relay E2E ✓
 ────────────────────╂───────────────────────┼────────────────────────
   LOW RISK          ┃ 💤 LOW PRIORITY       │ ✅ ACCEPTABLE
   (UI, tooling,     ┃                       │
@@ -189,8 +191,8 @@ Test Coverage vs. Risk Matrix
 
 | Gap | Impact | Effort | Priority |
 |-----|--------|--------|----------|
-| **Replay engine E2E tests** | High -- core value prop, only tested with mocked data | Medium -- needs a test PG instance | High |
-| **Proxy relay E2E tests** | High -- protocol parsing is tested but full relay is not | High -- needs client+server harness | High |
+| ~~**Replay engine E2E tests**~~ | ~~High~~ | ~~Medium~~ | **Done** -- 10 E2E tests against real PG (basic SELECT, DML, transactions, auto-rollback, parallel sessions, speed control, error handling) |
+| ~~**Proxy relay E2E tests**~~ | ~~High~~ | ~~High~~ | **Done** -- 6 E2E tests (basic relay, SQL capture, PII masking, 5 concurrent clients, no-capture mode, duration auto-shutdown) |
 | **LLM advisor integration tests** | Medium -- API calls are mocked, no real LLM validation | Low -- mock server or record/replay | Medium |
 | **Web endpoint deep tests** | Medium -- only smoke tests, no error path coverage | Medium | Medium |
 | **Web frontend tests** | Low-Medium -- no browser automation | High -- needs Playwright/Cypress | Low |
