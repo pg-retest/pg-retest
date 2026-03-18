@@ -93,12 +93,27 @@ pie title Feature Completion
 
 ### Unit Tests (107 total)
 
-```mermaid
-bar chart
-    title Unit Tests by Module
-    x-axis [csv_log, masking, mysql_slow, config, protocol, capture, provision, analyze, mysql_to_pg, engine, plan, planner, advisor, context, safety, apply, types, web_db]
-    y-axis "Test count" 0 --> 15
-    bar [11, 8, 5, 12, 14, 3, 3, 9, 9, 5, 3, 4, 3, 1, 5, 1, 2, 8]
+```
+Unit Tests by Module (107 total)
+
+proxy::protocol  ██████████████ 14
+config           ████████████   12
+capture::csv_log ███████████    11
+transform::analy █████████       9
+transform::m2pg  █████████       9
+capture::masking ████████        8
+web::db          ████████        8
+capture::mysql   █████           5
+transform::engin █████           5
+tuner::safety    █████           5
+transform::plann ████            4
+proxy::capture   ███             3
+provision        ███             3
+transform::plan  ███             3
+tuner::advisor   ███             3
+tuner::types     ██              2
+tuner::context   █               1
+tuner::apply     █               1
 ```
 
 | Module | Tests | Coverage Notes |
@@ -152,29 +167,24 @@ bar chart
 
 ### Testing Gaps
 
-```mermaid
-quadrantChart
-    title Test Coverage vs. Risk
-    x-axis Low Test Coverage --> High Test Coverage
-    y-axis Low Risk --> High Risk
-    quadrant-1 Well Protected
-    quadrant-2 Needs Attention
-    quadrant-3 Low Priority
-    quadrant-4 Acceptable Risk
-    CSV Log Parser: [0.85, 0.7]
-    PII Masking: [0.8, 0.6]
-    Profile I/O: [0.8, 0.5]
-    Replay Engine: [0.5, 0.8]
-    Proxy Relay: [0.4, 0.7]
-    Web Endpoints: [0.3, 0.5]
-    Web Frontend: [0.1, 0.4]
-    LLM Integration: [0.2, 0.6]
-    Docker Provisioner: [0.3, 0.4]
-    Tuner Context: [0.15, 0.5]
-    Classification: [0.75, 0.3]
-    Comparison: [0.8, 0.5]
-    Threshold: [0.7, 0.4]
-    Transform Engine: [0.7, 0.3]
+```
+Test Coverage vs. Risk Matrix
+
+                    ┃ LOW COVERAGE          │ HIGH COVERAGE
+━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━┿━━━━━━━━━━━━━━━━━━━━━━━━
+  HIGH RISK         ┃ ⚠ NEEDS ATTENTION     │ ✅ WELL PROTECTED
+  (core features,   ┃                       │
+   data integrity)  ┃ • Replay Engine E2E   │ • CSV Log Parser
+                    ┃ • Proxy Relay E2E     │ • PII Masking
+                    ┃ • LLM Integration     │ • Profile I/O
+                    ┃ • Tuner Context       │ • Comparison
+────────────────────╂───────────────────────┼────────────────────────
+  LOW RISK          ┃ 💤 LOW PRIORITY       │ ✅ ACCEPTABLE
+  (UI, tooling,     ┃                       │
+   non-critical)    ┃ • Web Frontend        │ • Classification
+                    ┃ • Docker Provisioner  │ • Threshold
+                    ┃ • Web Endpoints       │ • Transform Engine
+                    ┃                       │ • Scaling
 ```
 
 | Gap | Impact | Effort | Priority |
