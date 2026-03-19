@@ -1,0 +1,53 @@
+services:
+  db-a:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ecommerce
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - ./demo/init-db-a.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5450:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db-b:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ecommerce
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - ./demo/init-db-b.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5451:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pg-retest:
+    build: .
+    environment:
+      PG_RETEST_DEMO: "true"
+      DEMO_DB_A: "host=db-a dbname=ecommerce user=demo password=demo"
+      DEMO_DB_B: "host=db-b dbname=ecommerce user=demo password=demo"
+      DEMO_WORKLOAD: "/demo/workload.wkl"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./demo:/demo:ro
+      - pgdata:/data
+    depends_on:
+      db-a:
+        condition: service_healthy
+      db-b:
+        condition: service_healthy
+
+volumes:
+  pgdata:
