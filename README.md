@@ -46,14 +46,26 @@ graph LR
 
 ### Try with Docker
 
+No Rust toolchain needed — just Docker.
+
 ```bash
-# Start the full demo environment (two PostgreSQL databases + web dashboard)
+git clone https://github.com/your-org/pg-retest.git
+cd pg-retest
+
+# Build and start the demo (first build takes ~5 minutes)
 docker compose up --build
 
 # Open http://localhost:8080 — click "Demo" in the sidebar
+```
+
+The demo environment includes two PostgreSQL 16 databases seeded with a 94k-row e-commerce dataset and a pre-built workload with 357 queries across 8 concurrent sessions. The Demo page provides a guided wizard that walks you through the full workflow — inspect, replay, compare, scale, and AI-assisted tuning — plus scenario cards for quick exploration of migration testing, capacity planning, and A/B comparisons.
+
+```bash
 # Tear down when done:
 docker compose down -v
 ```
+
+See the [Demo Environment Guide](docs/demo.md) for full details, CLI examples, and troubleshooting.
 
 ### Prerequisites
 
@@ -841,7 +853,13 @@ cargo fmt
 
 ## Documentation
 
-Design documents and implementation plans are available in the `docs/` directory:
+User guides are available in the `docs/` directory:
+
+- `docs/demo.md` -- Docker demo environment setup and walkthrough
+- `docs/tuning.md` -- AI-assisted tuning guide
+- `docs/transform.md` -- AI-powered workload transform guide
+
+Design documents and implementation plans:
 
 - `docs/plans/2026-03-03-pg-retest-m1-design.md` -- M1 Capture & Replay design
 - `docs/plans/2026-03-04-m3-cicd-design.md` -- M3 CI/CD integration design
