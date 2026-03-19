@@ -31,7 +31,7 @@ function demoPage() {
                     <div class="fade-in text-center py-16">
                         <div class="text-4xl mb-4 opacity-50">\u{1F6AB}</div>
                         <h2 class="text-lg font-semibold text-slate-300 mb-2">Demo Mode Not Available</h2>
-                        <p class="text-sm text-slate-500">Start the server with <code class="font-mono text-accent">--demo</code> flag to enable demo features.</p>
+                        <p class="text-sm text-slate-500">Set <code class="font-mono text-accent">PG_RETEST_DEMO=true</code> to enable the demo environment.</p>
                     </div>`;
                     return;
                 }
@@ -44,7 +44,7 @@ function demoPage() {
                     <div class="fade-in text-center py-16">
                         <div class="text-4xl mb-4 opacity-50">\u{1F6AB}</div>
                         <h2 class="text-lg font-semibold text-slate-300 mb-2">Demo Mode Disabled</h2>
-                        <p class="text-sm text-slate-500">Start the server with <code class="font-mono text-accent">--demo</code> flag to enable demo features.</p>
+                        <p class="text-sm text-slate-500">Set <code class="font-mono text-accent">PG_RETEST_DEMO=true</code> to enable the demo environment.</p>
                     </div>`;
                     return;
                 }
