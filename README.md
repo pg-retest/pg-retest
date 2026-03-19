@@ -44,6 +44,17 @@ graph LR
 
 ## Quick Start
 
+### Try with Docker
+
+```bash
+# Start the full demo environment (two PostgreSQL databases + web dashboard)
+docker compose up --build
+
+# Open http://localhost:8080 — click "Demo" in the sidebar
+# Tear down when done:
+docker compose down -v
+```
+
 ### Prerequisites
 
 - **Rust** toolchain (1.70+): [Install via rustup](https://rustup.rs/)
