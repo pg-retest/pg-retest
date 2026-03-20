@@ -216,11 +216,13 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let active_staging_tx_clone = active_staging_tx.clone();
     let control_state_fwd = control_state.clone();
     let no_capture_fwd = no_capture.clone();
+    let staging_db_fwd = staging_db.clone();
     let forwarder_handle = tokio::spawn(async move {
         let mut rx = persistent_capture_rx;
         let mut capture_query_count: u64 = 0;
         let mut capture_start: Option<Instant> = None;
         let mut limit_triggered = false;
+        let mut last_size_check: u64 = 0; // check DB size every 1000 queries
 
         while let Some(event) = rx.recv().await {
             // Update ControlState counters for status endpoint
@@ -258,6 +260,23 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
                                 no_capture_fwd.store(true, Ordering::Relaxed);
                                 let _ = auto_stop_tx
                                     .send(format!("max_duration_reached ({:?})", max_dur));
+                            }
+                        }
+                    }
+
+                    // Check staging DB size limit (every 1000 queries to avoid overhead)
+                    if !limit_triggered
+                        && max_bytes > 0
+                        && capture_query_count - last_size_check >= 1000
+                    {
+                        last_size_check = capture_query_count;
+                        if let Ok(size) = staging_db_fwd.db_size_bytes().await {
+                            if size >= max_bytes {
+                                limit_triggered = true;
+                                warn!("Capture safeguard: staging DB size ({} bytes) exceeds limit ({} bytes), auto-stopping capture", size, max_bytes);
+                                no_capture_fwd.store(true, Ordering::Relaxed);
+                                let _ =
+                                    auto_stop_tx.send(format!("max_size_reached ({} bytes)", size));
                             }
                         }
                     }

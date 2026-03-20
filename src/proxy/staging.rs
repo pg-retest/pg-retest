@@ -157,6 +157,18 @@ impl StagingDb {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    /// Get the total size of the staging database in bytes.
+    /// Uses SQLite's `page_count * page_size` for an accurate estimate.
+    pub async fn db_size_bytes(&self) -> Result<u64> {
+        let conn = self.conn.lock().await;
+        let size: i64 = conn.query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(size as u64)
+    }
 }
 
 #[cfg(test)]
