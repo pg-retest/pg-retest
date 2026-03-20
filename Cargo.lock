@@ -1254,6 +1254,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-util",
  "toml",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

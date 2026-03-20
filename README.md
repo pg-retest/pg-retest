@@ -9,6 +9,21 @@
 
 Capture, replay, and compare PostgreSQL workloads. Validate configuration changes, server migrations, capacity planning, and cross-database migrations with confidence.
 
+---
+
+## Why pg-retest?
+
+| | |
+|---|---|
+| **🔄 Pre-Migration Validation** | Replay production traffic against your new datacenter, hardware, or cloud target before cutting over. Know it works — don't hope. |
+| **⬆️ Version & Patch Testing** | Upgrading PostgreSQL 15 → 16? Replay your exact workload against the new version and catch regressions before they hit production. |
+| **⚙️ Configuration Benchmarking** | Changed `shared_buffers` or `work_mem`? Compare before and after with real queries, not synthetic benchmarks. |
+| **☁️ Cloud Provider Evaluation** | RDS vs. Aurora vs. AlloyDB vs. self-hosted — replay identical traffic against each and let the numbers decide. |
+| **📈 Capacity Planning** | Scale your workload 2x, 5x, 10x to find where things break — before Black Friday finds it for you. |
+| **🚦 CI/CD Regression Gates** | Automated pass/fail on every schema migration or config change. Catch performance regressions in the pipeline, not in production. |
+| **🔀 Cross-Database Migration** | Moving from MySQL to PostgreSQL? Capture your MySQL workload, transform the SQL, and validate it runs correctly on PG. |
+| **🤖 AI-Assisted Optimization** | Get LLM-powered tuning recommendations — then validate every change against your real workload with automatic rollback on regression. |
+
 ```mermaid
 graph LR
     A[Capture] -->|.wkl profile| B[Replay]
@@ -28,6 +43,29 @@ graph LR
 ---
 
 ## Quick Start
+
+### Try with Docker
+
+No Rust toolchain needed — just Docker.
+
+```bash
+git clone https://github.com/your-org/pg-retest.git
+cd pg-retest
+
+# Build and start the demo (first build takes ~5 minutes)
+docker compose up --build
+
+# Open http://localhost:8080 — click "Demo" in the sidebar
+```
+
+The demo environment includes two PostgreSQL 16 databases seeded with a 94k-row e-commerce dataset and a pre-built workload with 357 queries across 8 concurrent sessions. The Demo page provides a guided wizard that walks you through the full workflow — inspect, replay, compare, scale, and AI-assisted tuning — plus scenario cards for quick exploration of migration testing, capacity planning, and A/B comparisons.
+
+```bash
+# Tear down when done:
+docker compose down -v
+```
+
+See the [Demo Environment Guide](docs/demo.md) for full details, CLI examples, and troubleshooting.
 
 ### Prerequisites
 
@@ -362,6 +400,22 @@ Options:
 - `--mask-values` -- strip PII from captured SQL literals
 
 Stop with Ctrl+C (SIGINT) or SIGTERM -- the proxy writes the `.wkl` file on graceful shutdown.
+
+### Persistent Proxy Mode
+
+Run the proxy as a long-lived service — no traffic redirection needed for each capture:
+
+```bash
+# Start persistent proxy (no capture yet)
+pg-retest proxy --listen 0.0.0.0:5433 --target db:5432 --persistent
+
+# From another terminal: start/stop captures
+pg-retest proxy-ctl start-capture --proxy localhost:9091
+pg-retest proxy-ctl stop-capture --proxy localhost:9091 --output workload.wkl
+pg-retest proxy-ctl status --proxy localhost:9091
+```
+
+Captured queries are staged to SQLite to prevent OOM on long-running captures. Multiple sequential captures are supported without restarting the proxy. The proxy can also be controlled from the web dashboard's Proxy page.
 
 ### MySQL Slow Query Log Capture
 
@@ -815,7 +869,13 @@ cargo fmt
 
 ## Documentation
 
-Design documents and implementation plans are available in the `docs/` directory:
+User guides are available in the `docs/` directory:
+
+- `docs/demo.md` -- Docker demo environment setup and walkthrough
+- `docs/tuning.md` -- AI-assisted tuning guide
+- `docs/transform.md` -- AI-powered workload transform guide
+
+Design documents and implementation plans:
 
 - `docs/plans/2026-03-03-pg-retest-m1-design.md` -- M1 Capture & Replay design
 - `docs/plans/2026-03-04-m3-cicd-design.md` -- M3 CI/CD integration design

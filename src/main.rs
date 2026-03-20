@@ -25,6 +25,7 @@ fn main() -> Result<()> {
         Commands::Web(args) => cmd_web(args),
         Commands::Transform(args) => cmd_transform(args),
         Commands::Tune(args) => cmd_tune(args),
+        Commands::ProxyCtl(args) => cmd_proxy_ctl(args),
     }
 }
 
@@ -249,19 +250,60 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
 
     let duration = args.duration.as_deref().map(parse_duration).transpose()?;
 
+    // Default output to "workload.wkl" when not persistent and no output specified
+    let output = match (&args.output, args.persistent) {
+        (Some(p), _) => Some(p.clone()),
+        (None, true) => None,
+        (None, false) => Some("workload.wkl".into()),
+    };
+
     let config = ProxyConfig {
         listen_addr: args.listen,
         target_addr: args.target,
-        output: args.output,
+        output,
         pool_size: args.pool_size,
         pool_timeout_secs: args.pool_timeout,
         mask_values: args.mask_values,
         no_capture: args.no_capture,
         duration,
+        persistent: args.persistent,
+        control_port: if args.persistent {
+            Some(args.control_port)
+        } else {
+            None
+        },
+        max_capture_queries: args.max_capture_queries,
+        max_capture_bytes: parse_size_string(&args.max_capture_size),
+        max_capture_duration: args
+            .max_capture_duration
+            .as_deref()
+            .and_then(|s| parse_duration(s).ok()),
     };
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_proxy(config))
+}
+
+/// Parse a human-readable size string (e.g., "500MB", "1GB", "0") into bytes.
+fn parse_size_string(s: &str) -> u64 {
+    let s = s.trim().to_uppercase();
+    if s == "0" || s.is_empty() {
+        return 0;
+    }
+    let (num_str, multiplier) = if s.ends_with("GB") {
+        (&s[..s.len() - 2], 1_073_741_824u64)
+    } else if s.ends_with("MB") {
+        (&s[..s.len() - 2], 1_048_576u64)
+    } else if s.ends_with("KB") {
+        (&s[..s.len() - 2], 1_024u64)
+    } else {
+        (s.as_str(), 1u64) // raw bytes
+    };
+    num_str
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0)
+        .saturating_mul(multiplier)
 }
 
 fn cmd_run(args: pg_retest::cli::RunArgs) -> Result<()> {
@@ -516,6 +558,73 @@ fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_proxy_ctl(args: pg_retest::cli::ProxyCtlArgs) -> Result<()> {
+    use pg_retest::cli::ProxyCtlAction;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let base_url = format!("http://{}", args.proxy);
+        let client = reqwest::Client::new();
+
+        // Auto-detect: try web API health first
+        let is_web = client
+            .get(format!("{}/api/v1/health", base_url))
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+
+        let api_prefix = if is_web { "/api/v1/proxy" } else { "" };
+
+        match args.action {
+            ProxyCtlAction::Status => {
+                let resp = client
+                    .get(format!("{}{}/status", base_url, api_prefix))
+                    .send()
+                    .await?;
+                let body: serde_json::Value = resp.json().await?;
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            }
+            ProxyCtlAction::StartCapture => {
+                let resp = client
+                    .post(format!("{}{}/start-capture", base_url, api_prefix))
+                    .send()
+                    .await?;
+                let body: serde_json::Value = resp.json().await?;
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            }
+            ProxyCtlAction::StopCapture { output } => {
+                let mut req = client.post(format!("{}{}/stop-capture", base_url, api_prefix));
+                if let Some(path) = output {
+                    req = req.json(&serde_json::json!({ "output": path.to_string_lossy() }));
+                }
+                let resp = req.send().await?;
+                let body: serde_json::Value = resp.json().await?;
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            }
+            ProxyCtlAction::Recover => {
+                let resp = client
+                    .post(format!("{}{}/recover", base_url, api_prefix))
+                    .send()
+                    .await?;
+                let body: serde_json::Value = resp.json().await?;
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            }
+            ProxyCtlAction::Discard => {
+                let resp = client
+                    .post(format!("{}{}/discard", base_url, api_prefix))
+                    .send()
+                    .await?;
+                let body: serde_json::Value = resp.json().await?;
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            }
+        }
+
+        Ok(())
+    })
 }
 
 fn parse_duration(s: &str) -> Result<std::time::Duration> {

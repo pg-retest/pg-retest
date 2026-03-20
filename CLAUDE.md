@@ -99,6 +99,9 @@ Key modules:
 - `web::handlers::runs` — Historical run listing, filtering, trends
 - `web::handlers::transform` — Transform API endpoints (analyze, plan, apply) for web dashboard
 - `web::handlers::tuning` — Tuning API endpoints (start, status, cancel) for web dashboard
+- `web::handlers::demo` — Demo mode handlers (wizard steps, scenario cards, DB reset)
+- `proxy::staging` — SQLite staging for capture data (batched insert, read-back, cleanup, crash recovery)
+- `proxy::control` — Minimal HTTP control endpoint for standalone persistent proxy
 
 ## Milestone Status
 
@@ -108,6 +111,7 @@ Key modules:
 - **M4: Cross-Database Capture (MySQL)** — Complete. MySQL slow query log parser, composable SQL transform pipeline (regex-based: backticks, LIMIT, IFNULL, IF, UNIX_TIMESTAMP), CLI `--source-type mysql-slow`, pipeline config support.
 - **Gap Closure** — Complete. Per-category scaling, A/B variant testing (`pg-retest ab`), cloud-native capture from AWS RDS/Aurora (`--source-type rds`).
 - **Web Dashboard** — Complete. Axum + Alpine.js + Chart.js SPA (`pg-retest web --port 8080`). 11 pages: dashboard, workloads, proxy, replay, A/B, compare, pipeline, history, transform, tuning, help. WebSocket real-time updates. SQLite metadata storage.
+- **Docker Demo** — Complete. Docker Compose with pg-retest + db-a (seeded) + db-b (seeded). E-commerce schema (5 tables, ~94k rows). Demo page with 5-step wizard + 4 scenario cards. `PG_RETEST_DEMO=true` env var activation.
 - **Workload Transform** — Complete. AI-powered workload transformation (`pg-retest transform analyze|plan|apply`). 3-layer architecture: deterministic Analyzer (Union-Find table grouping), multi-provider LLM Planner (Claude/OpenAI/Gemini/Bedrock/Ollama), deterministic Engine (weighted session duplication, query injection, group removal). TOML transform plans as intermediate artifact. Design at `docs/plans/2026-03-07-workload-transform-design.md`. 201 tests.
 - **M5: AI-Assisted Tuning** — Complete. Multi-provider LLM tuning (`pg-retest tune`). Configurable loop: collect PG context → LLM recommendations → safety validation → apply → replay → compare → auto-rollback on p95 regression → iterate. 4 recommendation types (config, index, query rewrite, schema). Safety allowlist (~41 safe PG params), production hostname check. 5 providers: Claude/OpenAI/Gemini/Bedrock/Ollama. Tuning report persistence to SQLite. Dry-run default. Web dashboard tuning page with history and recommendations. 232 tests.
 
@@ -155,6 +159,14 @@ Key modules:
 - Transform: `apply_transform()` is deterministic when given the same seed. Default seed is derived from the plan's prompt string hash.
 - Transform: LLM planner uses `reqwest` for direct HTTP calls (Bedrock via AWS CLI subprocess). API key resolution: `--api-key` flag → `ANTHROPIC_API_KEY` env → `OPENAI_API_KEY` env → `GEMINI_API_KEY` env. Bedrock uses standard AWS credentials (env/profile/IAM role).
 - Transform: `--dry-run` on `transform plan` shows the analyzer output and system prompt without calling the LLM API.
+- Demo mode: requires `PG_RETEST_DEMO=true` env var. Connection strings via `DEMO_DB_A`, `DEMO_DB_B`. Workload path via `DEMO_WORKLOAD`.
+- Demo page: wizard step state and scenario results are stored in-memory (reset on server restart).
+- Demo DB reset: drops and recreates all tables in DB-B by re-running init-db-b.sql.
+- Proxy persistent mode: `--persistent` keeps proxy running, capture toggled via `proxy-ctl` or web UI. Without `--persistent`, behavior is identical to before.
+- Proxy staging: capture data staged to SQLite (`capture_staging` table) instead of in-memory. Batched inserts (100 queries or 500ms). Crash recovery via `proxy-ctl recover`.
+- Proxy control port: standalone persistent proxy exposes HTTP control on `--control-port` (default 9091). Web mode uses existing `/api/v1/proxy/*` endpoints instead.
+- `proxy-ctl` auto-detects web vs standalone by trying `GET /api/v1/health`.
+- `no_capture` is `Arc<AtomicBool>` shared across all relay connections — toggled at runtime for persistent capture start/stop.
 
 ## Conventions
 

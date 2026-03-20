@@ -1,20 +1,30 @@
 pub mod capture;
 pub mod connection;
+pub mod control;
 pub mod listener;
 pub mod pool;
 pub mod protocol;
+pub mod staging;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
+use uuid::Uuid;
 
-use self::capture::{build_profile, run_collector, CaptureEvent};
+use self::capture::{
+    build_profile, build_profile_from_staging, run_collector, run_staging_collector, CaptureEvent,
+};
+use self::control::{build_control_router, CaptureCommand, ControlState};
 use self::pool::SessionPool;
+use self::staging::StagingDb;
 use crate::profile::io;
 use crate::profile::WorkloadProfile;
 
@@ -22,16 +32,28 @@ use crate::profile::WorkloadProfile;
 pub struct ProxyConfig {
     pub listen_addr: String,
     pub target_addr: String,
-    pub output: PathBuf,
+    pub output: Option<PathBuf>,
     pub pool_size: usize,
     pub pool_timeout_secs: u64,
     pub mask_values: bool,
     pub no_capture: bool,
     pub duration: Option<std::time::Duration>,
+    pub persistent: bool,
+    pub control_port: Option<u16>,
+    /// Max queries before auto-stopping capture (0 = unlimited)
+    pub max_capture_queries: u64,
+    /// Max staging DB size in bytes before auto-stopping capture (0 = unlimited)
+    pub max_capture_bytes: u64,
+    /// Max capture duration before auto-stopping (None = unlimited)
+    pub max_capture_duration: Option<std::time::Duration>,
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
 pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
+    if config.persistent {
+        return run_proxy_persistent(config).await;
+    }
+
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let pool = Arc::new(SessionPool::new(
         config.target_addr.clone(),
@@ -46,7 +68,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
 
     // Spawn listener (no metrics channel in CLI mode)
     let pool_clone = pool.clone();
-    let no_capture = config.no_capture;
+    let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(listener, pool_clone, capture_tx, no_capture, None).await
     });
@@ -100,20 +122,396 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         profile.metadata.total_queries, profile.metadata.total_sessions
     );
 
-    io::write_profile(&config.output, &profile)?;
-    info!("Wrote workload profile to {}", config.output.display());
+    if let Some(ref output) = config.output {
+        io::write_profile(output, &profile)?;
+        info!("Wrote workload profile to {}", output.display());
+    } else {
+        info!("No output path specified — skipping profile write");
+    }
 
+    Ok(())
+}
+
+/// Run the proxy in persistent mode (stays running, capture controlled via HTTP).
+async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
+    let listener = TcpListener::bind(&config.listen_addr).await?;
+    let pool = Arc::new(SessionPool::new(
+        config.target_addr.clone(),
+        config.pool_size,
+        config.pool_timeout_secs,
+    ));
+
+    // Shared no_capture flag — starts as true (no capture until start-capture is called)
+    let no_capture = Arc::new(AtomicBool::new(true));
+
+    // Channel for capture commands from the control endpoint
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<CaptureCommand>();
+
+    // Set up control state
+    let control_port = config.control_port.unwrap_or(6544);
+    let control_state = Arc::new(RwLock::new(ControlState {
+        running: true,
+        capturing: false,
+        capture_id: None,
+        active_sessions: 0,
+        total_queries: 0,
+        started_at: Instant::now(),
+        capture_cmd_tx: Some(cmd_tx),
+        staging_db: None, // Set after staging_db is opened below
+    }));
+
+    // Start the control HTTP endpoint
+    let control_router = build_control_router(control_state.clone());
+    let control_addr = format!("0.0.0.0:{control_port}");
+    let control_listener = TcpListener::bind(&control_addr).await?;
+    info!("Persistent proxy control endpoint on http://{control_addr}");
+
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(control_listener, control_router).await {
+            tracing::error!("Control endpoint error: {e}");
+        }
+    });
+
+    // Open standalone staging DB
+    let staging_db = StagingDb::open_standalone(&PathBuf::from("proxy-capture.db")).await?;
+
+    // Store staging_db in control state for recover/discard endpoints
+    {
+        let mut cs = control_state.write().await;
+        cs.staging_db = Some(staging_db.clone());
+    }
+
+    // Spawn the listener — it runs for the entire lifetime of the proxy.
+    // We need a capture_tx that stays alive. We'll swap the receiver on start/stop.
+    let (persistent_capture_tx, persistent_capture_rx) = mpsc::unbounded_channel::<CaptureEvent>();
+
+    let pool_clone = pool.clone();
+    let no_capture_clone = no_capture.clone();
+    let listener_handle = tokio::spawn(async move {
+        listener::run_listener(
+            listener,
+            pool_clone,
+            persistent_capture_tx,
+            no_capture_clone,
+            None,
+        )
+        .await
+    });
+
+    // We need to forward events from the persistent channel to the active staging collector.
+    // Use an intermediary: a shared optional sender that the forwarder writes to.
+    let active_staging_tx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedSender<CaptureEvent>>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+
+    // Capture safeguard limits
+    let max_queries = config.max_capture_queries;
+    let max_bytes = config.max_capture_bytes;
+    let max_duration = config.max_capture_duration;
+
+    // Auto-stop channel: forwarder sends here when limits are exceeded
+    let (auto_stop_tx, auto_stop_rx) = mpsc::unbounded_channel::<String>(); // reason string
+
+    // Spawn a forwarder task that reads from persistent_capture_rx, updates
+    // ControlState counters, checks safeguard limits, and forwards to the active staging collector.
+    let active_staging_tx_clone = active_staging_tx.clone();
+    let control_state_fwd = control_state.clone();
+    let no_capture_fwd = no_capture.clone();
+    let staging_db_fwd = staging_db.clone();
+    let forwarder_handle = tokio::spawn(async move {
+        let mut rx = persistent_capture_rx;
+        let mut capture_query_count: u64 = 0;
+        let mut capture_start: Option<Instant> = None;
+        let mut limit_triggered = false;
+        let mut last_size_check: u64 = 0; // check DB size every 1000 queries
+
+        while let Some(event) = rx.recv().await {
+            // Update ControlState counters for status endpoint
+            match &event {
+                CaptureEvent::SessionStart { .. } => {
+                    let mut cs = control_state_fwd.write().await;
+                    cs.active_sessions += 1;
+                    if capture_start.is_none() && cs.capturing {
+                        capture_start = Some(Instant::now());
+                    }
+                }
+                CaptureEvent::SessionEnd { .. } => {
+                    let mut cs = control_state_fwd.write().await;
+                    cs.active_sessions = cs.active_sessions.saturating_sub(1);
+                }
+                CaptureEvent::QueryComplete { .. } | CaptureEvent::QueryError { .. } => {
+                    let mut cs = control_state_fwd.write().await;
+                    cs.total_queries += 1;
+                    capture_query_count += 1;
+
+                    // Check query count limit
+                    if !limit_triggered && max_queries > 0 && capture_query_count >= max_queries {
+                        limit_triggered = true;
+                        warn!("Capture safeguard: max query count ({}) reached, auto-stopping capture", max_queries);
+                        no_capture_fwd.store(true, Ordering::Relaxed);
+                        let _ = auto_stop_tx.send(format!("max_queries_reached ({})", max_queries));
+                    }
+
+                    // Check duration limit
+                    if !limit_triggered {
+                        if let (Some(max_dur), Some(start)) = (max_duration, capture_start) {
+                            if start.elapsed() >= max_dur {
+                                limit_triggered = true;
+                                warn!("Capture safeguard: max duration ({:?}) reached, auto-stopping capture", max_dur);
+                                no_capture_fwd.store(true, Ordering::Relaxed);
+                                let _ = auto_stop_tx
+                                    .send(format!("max_duration_reached ({:?})", max_dur));
+                            }
+                        }
+                    }
+
+                    // Check staging DB size limit (every 1000 queries to avoid overhead)
+                    if !limit_triggered
+                        && max_bytes > 0
+                        && capture_query_count - last_size_check >= 1000
+                    {
+                        last_size_check = capture_query_count;
+                        if let Ok(size) = staging_db_fwd.db_size_bytes().await {
+                            if size >= max_bytes {
+                                limit_triggered = true;
+                                warn!("Capture safeguard: staging DB size ({} bytes) exceeds limit ({} bytes), auto-stopping capture", size, max_bytes);
+                                no_capture_fwd.store(true, Ordering::Relaxed);
+                                let _ =
+                                    auto_stop_tx.send(format!("max_size_reached ({} bytes)", size));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            // Forward to active staging collector (if any)
+            let guard = active_staging_tx_clone.lock().await;
+            if let Some(ref tx) = *guard {
+                let _ = tx.send(event);
+            }
+        }
+    });
+
+    // Track the active collector task
+    let mut active_collector: Option<tokio::task::JoinHandle<()>> = None;
+    let mut active_capture_id: Option<String> = None;
+
+    info!(
+        "Persistent proxy running on {} (target: {})",
+        config.listen_addr, config.target_addr
+    );
+    info!("Use POST http://localhost:{control_port}/start-capture to begin capturing");
+
+    // Wrap auto_stop_rx for use in select
+    let mut auto_stop_rx = auto_stop_rx;
+
+    // Main command loop — also listen for shutdown signals and auto-stop
+    loop {
+        let cmd = tokio::select! {
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(c) => c,
+                    None => break, // Command channel closed
+                }
+            }
+            reason = auto_stop_rx.recv() => {
+                // Safeguard triggered — synthesize a Stop command
+                if let Some(reason) = reason {
+                    warn!("Auto-stopping capture: {reason}");
+                    // Create a dummy reply channel (we log the result ourselves)
+                    let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                    CaptureCommand::Stop { output: None, reply: reply_tx }
+                } else {
+                    continue;
+                }
+            }
+            _ = async {
+                #[cfg(unix)]
+                {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut sigterm = signal(SignalKind::terminate()).unwrap();
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {},
+                        _ = sigterm.recv() => {},
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    tokio::signal::ctrl_c().await.unwrap();
+                }
+            } => {
+                info!("Shutdown signal received, stopping persistent proxy...");
+                break;
+            }
+        };
+
+        match cmd {
+            CaptureCommand::Start { reply } => {
+                if active_capture_id.is_some() {
+                    let _ = reply.send(Err("Already capturing".to_string()));
+                    continue;
+                }
+
+                let capture_id = Uuid::new_v4().to_string();
+                info!("Starting capture session: {capture_id}");
+
+                // Create a new staging collector channel
+                let (staging_tx, staging_rx) = mpsc::unbounded_channel::<CaptureEvent>();
+
+                // Set the forwarder to send to this new staging collector
+                {
+                    let mut guard = active_staging_tx.lock().await;
+                    *guard = Some(staging_tx);
+                }
+
+                // Spawn staging collector
+                let db_clone = staging_db.clone();
+                let cap_id_clone = capture_id.clone();
+                active_collector = Some(tokio::spawn(async move {
+                    run_staging_collector(staging_rx, db_clone, cap_id_clone).await;
+                }));
+
+                // Enable capture
+                no_capture.store(false, Ordering::Relaxed);
+
+                // Update control state
+                {
+                    let mut state = control_state.write().await;
+                    state.capturing = true;
+                    state.capture_id = Some(capture_id.clone());
+                }
+
+                active_capture_id = Some(capture_id.clone());
+                let _ = reply.send(Ok(capture_id));
+            }
+            CaptureCommand::Stop { output, reply } => {
+                let capture_id = match active_capture_id.take() {
+                    Some(id) => id,
+                    None => {
+                        let _ = reply.send(Err("Not currently capturing".to_string()));
+                        continue;
+                    }
+                };
+
+                info!("Stopping capture session: {capture_id}");
+
+                // Disable capture (stop emitting events)
+                no_capture.store(true, Ordering::Relaxed);
+
+                // Close the staging collector channel by clearing the forwarder target
+                {
+                    let mut guard = active_staging_tx.lock().await;
+                    *guard = None; // Drops the sender, closing the staging collector's channel
+                }
+
+                // Wait for the collector to finish processing
+                if let Some(handle) = active_collector.take() {
+                    let _ = handle.await;
+                }
+
+                // Read staged data and build profile
+                let rows = match staging_db.read_capture(&capture_id).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = reply.send(Err(format!("Failed to read staging data: {e}")));
+                        continue;
+                    }
+                };
+
+                let profile =
+                    build_profile_from_staging(rows, &config.target_addr, config.mask_values);
+
+                info!(
+                    "Captured {} queries across {} sessions",
+                    profile.metadata.total_queries, profile.metadata.total_sessions
+                );
+
+                // Determine output path
+                let output_path = output.or_else(|| config.output.clone()).unwrap_or_else(|| {
+                    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                    PathBuf::from(format!("capture-{ts}.wkl"))
+                });
+
+                // Write profile
+                if let Err(e) = io::write_profile(&output_path, &profile) {
+                    let _ = reply.send(Err(format!("Failed to write profile: {e}")));
+                    // Clean up staging data even on write failure
+                    let _ = staging_db.clear_capture(&capture_id).await;
+                    // Update control state
+                    let mut state = control_state.write().await;
+                    state.capturing = false;
+                    state.capture_id = None;
+                    continue;
+                }
+
+                info!("Wrote workload profile to {}", output_path.display());
+
+                // Clear staging data
+                let _ = staging_db.clear_capture(&capture_id).await;
+
+                // Update control state
+                {
+                    let mut state = control_state.write().await;
+                    state.capturing = false;
+                    state.capture_id = None;
+                }
+
+                let _ = reply.send(Ok(serde_json::json!({
+                    "ok": true,
+                    "capture_id": capture_id,
+                    "output": output_path.to_string_lossy(),
+                    "total_sessions": profile.metadata.total_sessions,
+                    "total_queries": profile.metadata.total_queries,
+                })));
+            }
+        }
+    }
+
+    // Shutdown: if we were capturing, stop it
+    if let Some(capture_id) = active_capture_id.take() {
+        info!("Stopping active capture {capture_id} during shutdown...");
+        no_capture.store(true, Ordering::Relaxed);
+        {
+            let mut guard = active_staging_tx.lock().await;
+            *guard = None;
+        }
+        if let Some(handle) = active_collector.take() {
+            let _ = handle.await;
+        }
+    }
+
+    // Abort the listener
+    listener_handle.abort();
+    forwarder_handle.abort();
+
+    // Give active connections a moment to finish
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    info!("Persistent proxy stopped");
     Ok(())
 }
 
 /// Run the proxy server in managed mode (web UI — CancellationToken + metrics channel).
 ///
-/// Returns `Some(WorkloadProfile)` if capture was enabled, `None` otherwise.
+/// When `capture_cmd_rx` is `None`, behavior is the single-capture legacy mode:
+/// capture runs for the proxy lifetime and `Some(WorkloadProfile)` is returned on shutdown.
+///
+/// When `capture_cmd_rx` is `Some`, the proxy enters multi-capture mode:
+/// capture is toggled via `CaptureCommand::Start` / `CaptureCommand::Stop`.
+/// Each Stop writes a `.wkl` file and replies with a summary.
+/// The proxy stays running until `cancel_token` is cancelled, returning `Ok(None)`.
 pub async fn run_proxy_managed(
     config: ProxyConfig,
     cancel_token: CancellationToken,
     metrics_tx: mpsc::UnboundedSender<CaptureEvent>,
+    capture_cmd_rx: Option<mpsc::UnboundedReceiver<CaptureCommand>>,
 ) -> Result<Option<WorkloadProfile>> {
+    // Delegate to multi-capture path if a command channel was provided.
+    if let Some(cmd_rx) = capture_cmd_rx {
+        return run_proxy_managed_multi(config, cancel_token, metrics_tx, cmd_rx).await;
+    }
+
+    // ---------- Legacy single-capture path ----------
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let pool = Arc::new(SessionPool::new(
         config.target_addr.clone(),
@@ -128,7 +526,7 @@ pub async fn run_proxy_managed(
 
     // Spawn listener with metrics channel
     let pool_clone = pool.clone();
-    let no_capture = config.no_capture;
+    let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -182,8 +580,221 @@ pub async fn run_proxy_managed(
     );
 
     // Write profile to disk
-    io::write_profile(&config.output, &profile)?;
-    info!("Wrote workload profile to {}", config.output.display());
+    if let Some(ref output) = config.output {
+        io::write_profile(output, &profile)?;
+        info!("Wrote workload profile to {}", output.display());
+    }
 
     Ok(Some(profile))
+}
+
+/// Multi-capture managed proxy — capture is toggled via CaptureCommand messages.
+///
+/// Follows the same pattern as `run_proxy_persistent()` but integrates with the
+/// web UI via CancellationToken + metrics channel instead of signal handling + control HTTP.
+async fn run_proxy_managed_multi(
+    config: ProxyConfig,
+    cancel_token: CancellationToken,
+    metrics_tx: mpsc::UnboundedSender<CaptureEvent>,
+    mut cmd_rx: mpsc::UnboundedReceiver<CaptureCommand>,
+) -> Result<Option<WorkloadProfile>> {
+    let listener = TcpListener::bind(&config.listen_addr).await?;
+    let pool = Arc::new(SessionPool::new(
+        config.target_addr.clone(),
+        config.pool_size,
+        config.pool_timeout_secs,
+    ));
+
+    // Shared no_capture flag — starts true (no capture until Start command)
+    let no_capture = Arc::new(AtomicBool::new(true));
+
+    // Open staging DB in the output directory (or a temp location)
+    let staging_path = config
+        .output
+        .as_ref()
+        .and_then(|p| p.parent())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("proxy-capture-managed.db");
+    let staging_db = StagingDb::open_standalone(&staging_path).await?;
+
+    // Persistent capture channel — listener writes here for the proxy lifetime.
+    let (persistent_capture_tx, persistent_capture_rx) = mpsc::unbounded_channel::<CaptureEvent>();
+
+    let pool_clone = pool.clone();
+    let no_capture_clone = no_capture.clone();
+    let listener_handle = tokio::spawn(async move {
+        listener::run_listener(
+            listener,
+            pool_clone,
+            persistent_capture_tx,
+            no_capture_clone,
+            Some(metrics_tx),
+        )
+        .await
+    });
+
+    // Intermediary: forwarder sends events to the active staging collector (if any).
+    let active_staging_tx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedSender<CaptureEvent>>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+
+    let active_staging_tx_clone = active_staging_tx.clone();
+    let forwarder_handle = tokio::spawn(async move {
+        let mut rx = persistent_capture_rx;
+        while let Some(event) = rx.recv().await {
+            let guard = active_staging_tx_clone.lock().await;
+            if let Some(ref tx) = *guard {
+                let _ = tx.send(event);
+            }
+        }
+    });
+
+    // Track the active collector task
+    let mut active_collector: Option<tokio::task::JoinHandle<()>> = None;
+    let mut active_capture_id: Option<String> = None;
+
+    info!(
+        "Managed proxy (multi-capture) running on {} (target: {})",
+        config.listen_addr, config.target_addr
+    );
+
+    // Main command loop — also listen for cancel_token
+    loop {
+        let cmd = tokio::select! {
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(c) => c,
+                    None => break, // Command channel closed
+                }
+            }
+            _ = cancel_token.cancelled() => {
+                info!("Proxy cancelled via web UI");
+                break;
+            }
+        };
+
+        match cmd {
+            CaptureCommand::Start { reply } => {
+                if active_capture_id.is_some() {
+                    let _ = reply.send(Err("Already capturing".to_string()));
+                    continue;
+                }
+
+                let capture_id = Uuid::new_v4().to_string();
+                info!("Starting capture session: {capture_id}");
+
+                // Create a new staging collector channel
+                let (staging_tx, staging_rx) = mpsc::unbounded_channel::<CaptureEvent>();
+
+                // Set the forwarder to send to this new staging collector
+                {
+                    let mut guard = active_staging_tx.lock().await;
+                    *guard = Some(staging_tx);
+                }
+
+                // Spawn staging collector
+                let db_clone = staging_db.clone();
+                let cap_id_clone = capture_id.clone();
+                active_collector = Some(tokio::spawn(async move {
+                    run_staging_collector(staging_rx, db_clone, cap_id_clone).await;
+                }));
+
+                // Enable capture
+                no_capture.store(false, Ordering::Relaxed);
+
+                active_capture_id = Some(capture_id.clone());
+                let _ = reply.send(Ok(capture_id));
+            }
+            CaptureCommand::Stop { output, reply } => {
+                let capture_id = match active_capture_id.take() {
+                    Some(id) => id,
+                    None => {
+                        let _ = reply.send(Err("Not currently capturing".to_string()));
+                        continue;
+                    }
+                };
+
+                info!("Stopping capture session: {capture_id}");
+
+                // Disable capture (stop emitting events)
+                no_capture.store(true, Ordering::Relaxed);
+
+                // Close the staging collector channel by clearing the forwarder target
+                {
+                    let mut guard = active_staging_tx.lock().await;
+                    *guard = None;
+                }
+
+                // Wait for the collector to finish processing
+                if let Some(handle) = active_collector.take() {
+                    let _ = handle.await;
+                }
+
+                // Read staged data and build profile
+                let rows = match staging_db.read_capture(&capture_id).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = reply.send(Err(format!("Failed to read staging data: {e}")));
+                        continue;
+                    }
+                };
+
+                let profile =
+                    build_profile_from_staging(rows, &config.target_addr, config.mask_values);
+
+                info!(
+                    "Captured {} queries across {} sessions",
+                    profile.metadata.total_queries, profile.metadata.total_sessions
+                );
+
+                // Determine output path
+                let output_path = output.or_else(|| config.output.clone()).unwrap_or_else(|| {
+                    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                    PathBuf::from(format!("capture-{ts}.wkl"))
+                });
+
+                // Write profile
+                if let Err(e) = io::write_profile(&output_path, &profile) {
+                    let _ = reply.send(Err(format!("Failed to write profile: {e}")));
+                    let _ = staging_db.clear_capture(&capture_id).await;
+                    continue;
+                }
+
+                info!("Wrote workload profile to {}", output_path.display());
+
+                // Clear staging data
+                let _ = staging_db.clear_capture(&capture_id).await;
+
+                let _ = reply.send(Ok(serde_json::json!({
+                    "ok": true,
+                    "capture_id": capture_id,
+                    "output": output_path.to_string_lossy(),
+                    "total_sessions": profile.metadata.total_sessions,
+                    "total_queries": profile.metadata.total_queries,
+                })));
+            }
+        }
+    }
+
+    // Shutdown: if we were capturing, stop it
+    if let Some(capture_id) = active_capture_id.take() {
+        info!("Stopping active capture {capture_id} during shutdown...");
+        no_capture.store(true, Ordering::Relaxed);
+        {
+            let mut guard = active_staging_tx.lock().await;
+            *guard = None;
+        }
+        if let Some(handle) = active_collector.take() {
+            let _ = handle.await;
+        }
+    }
+
+    // Abort the listener
+    listener_handle.abort();
+    forwarder_handle.abort();
+
+    // Give active connections a moment to finish
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    info!("Managed proxy (multi-capture) stopped");
+    Ok(None)
 }

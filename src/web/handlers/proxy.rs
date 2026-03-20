@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::proxy::capture::CaptureEvent;
+use crate::proxy::control::CaptureCommand;
 use crate::web::db;
 use crate::web::state::AppState;
 use crate::web::ws::WsMessage;
@@ -20,6 +21,10 @@ pub struct ProxyState {
     pub target_addr: Option<String>,
     pub total_queries: u64,
     pub active_sessions: u64,
+    pub capture_cmd_tx: Option<mpsc::UnboundedSender<CaptureCommand>>,
+    pub capturing: bool,
+    pub capture_id: Option<String>,
+    pub capture_history: Vec<serde_json::Value>,
 }
 
 static PROXY_STATE: std::sync::OnceLock<Arc<RwLock<ProxyState>>> = std::sync::OnceLock::new();
@@ -54,6 +59,9 @@ pub async fn proxy_status(State(_state): State<AppState>) -> Json<serde_json::Va
         "target_addr": ps.target_addr,
         "total_queries": ps.total_queries,
         "active_sessions": ps.active_sessions,
+        "capturing": ps.capturing,
+        "capture_id": ps.capture_id,
+        "capture_history": ps.capture_history,
     }))
 }
 
@@ -78,17 +86,31 @@ pub async fn start_proxy(
     let config = crate::proxy::ProxyConfig {
         listen_addr: req.listen.clone(),
         target_addr: req.target.clone(),
-        output: output_path,
+        output: Some(output_path),
         pool_size: req.pool_size,
         pool_timeout_secs: 30,
         mask_values: req.mask_values,
         no_capture: req.no_capture,
         duration: None,
+        persistent: false,
+        control_port: None,
+        max_capture_queries: 0,
+        max_capture_bytes: 0,
+        max_capture_duration: None,
     };
 
     let listen = req.listen.clone();
     let target = req.target.clone();
     let state_clone = state.clone();
+
+    // Create capture command channel for multi-capture mode
+    let (capture_cmd_tx, capture_cmd_rx) = mpsc::unbounded_channel::<CaptureCommand>();
+
+    // Store the sender in proxy state so toggle_capture can use it
+    {
+        let mut ps = proxy_state().write().await;
+        ps.capture_cmd_tx = Some(capture_cmd_tx);
+    }
 
     let task_id = state
         .tasks
@@ -107,6 +129,8 @@ pub async fn start_proxy(
                         ps.target_addr = Some(target);
                         ps.total_queries = 0;
                         ps.active_sessions = 0;
+                        ps.capturing = false;
+                        ps.capture_id = None;
                     }
 
                     state_clone.broadcast(WsMessage::ProxyStarted {
@@ -123,9 +147,14 @@ pub async fn start_proxy(
                         run_metrics_consumer(metrics_rx, metrics_state, &metrics_task_id).await;
                     });
 
-                    // Run proxy with metrics channel
-                    let result =
-                        crate::proxy::run_proxy_managed(config, cancel_token, metrics_tx).await;
+                    // Run proxy with metrics channel and capture command channel
+                    let result = crate::proxy::run_proxy_managed(
+                        config,
+                        cancel_token,
+                        metrics_tx,
+                        Some(capture_cmd_rx),
+                    )
+                    .await;
 
                     // Wait for metrics consumer to drain
                     let _ = metrics_handle.await;
@@ -166,6 +195,9 @@ pub async fn start_proxy(
                         let mut ps = proxy_state().write().await;
                         ps.running = false;
                         ps.task_id = None;
+                        ps.capture_cmd_tx = None;
+                        ps.capturing = false;
+                        ps.capture_id = None;
                     }
 
                     state_clone.broadcast(WsMessage::ProxyStopped { workload_id });
@@ -351,7 +383,128 @@ pub async fn proxy_sessions(State(state): State<AppState>) -> Json<serde_json::V
 }
 
 /// POST /api/v1/proxy/toggle-capture
-pub async fn toggle_capture(State(_state): State<AppState>) -> Json<serde_json::Value> {
-    // Toggle capture mode — placeholder for future integration
-    Json(json!({ "toggled": true }))
+pub async fn toggle_capture(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let ps = proxy_state().read().await;
+
+    if !ps.running {
+        return Json(json!({ "error": "Proxy is not running" }));
+    }
+
+    let tx = match &ps.capture_cmd_tx {
+        Some(tx) => tx.clone(),
+        None => return Json(json!({ "error": "Proxy not configured for capture" })),
+    };
+    let currently_capturing = ps.capturing;
+    drop(ps);
+
+    if !currently_capturing {
+        // --- Start capturing ---
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        if tx.send(CaptureCommand::Start { reply: reply_tx }).is_err() {
+            return Json(json!({ "error": "Proxy not responding" }));
+        }
+
+        match reply_rx.await {
+            Ok(Ok(capture_id)) => {
+                // Update proxy state
+                {
+                    let mut ps = proxy_state().write().await;
+                    ps.capturing = true;
+                    ps.capture_id = Some(capture_id.clone());
+                }
+                Json(json!({
+                    "capturing": true,
+                    "capture_id": capture_id,
+                }))
+            }
+            Ok(Err(e)) => Json(json!({ "error": e })),
+            Err(_) => Json(json!({ "error": "Proxy not responding" })),
+        }
+    } else {
+        // --- Stop capturing ---
+        // Build output path in data_dir/workloads/
+        let output_dir = state.data_dir.join("workloads");
+        let _ = std::fs::create_dir_all(&output_dir);
+        let output_id = uuid::Uuid::new_v4().to_string();
+        let output_path = output_dir.join(format!("proxy-{output_id}.wkl"));
+
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        if tx
+            .send(CaptureCommand::Stop {
+                output: Some(output_path.clone()),
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Json(json!({ "error": "Proxy not responding" }));
+        }
+
+        match reply_rx.await {
+            Ok(Ok(result)) => {
+                let total_sessions = result["total_sessions"].as_u64().unwrap_or(0);
+                let total_queries = result["total_queries"].as_u64().unwrap_or(0);
+                let capture_id = result["capture_id"].as_str().unwrap_or("").to_string();
+
+                // Register the captured workload in the DB
+                let workload_id = uuid::Uuid::new_v4().to_string();
+                let w = db::WorkloadRow {
+                    id: workload_id.clone(),
+                    name: format!("proxy-{}", &workload_id[..8]),
+                    file_path: output_path.to_string_lossy().to_string(),
+                    source_type: Some("proxy".into()),
+                    source_host: None,
+                    captured_at: Some(chrono::Utc::now().to_rfc3339()),
+                    total_sessions: Some(total_sessions as i64),
+                    total_queries: Some(total_queries as i64),
+                    capture_duration_us: None,
+                    classification: None,
+                    created_at: None,
+                };
+                {
+                    let db = state.db.lock().await;
+                    let _ = db::insert_workload(&db, &w);
+                }
+
+                // Broadcast WS event
+                state.broadcast(WsMessage::ProxyStopped {
+                    workload_id: Some(workload_id.clone()),
+                });
+
+                // Build history entry
+                let history_entry = json!({
+                    "capture_id": capture_id,
+                    "workload_id": workload_id,
+                    "total_sessions": total_sessions,
+                    "total_queries": total_queries,
+                    "output": output_path.to_string_lossy(),
+                    "stopped_at": chrono::Utc::now().to_rfc3339(),
+                });
+
+                // Update proxy state
+                {
+                    let mut ps = proxy_state().write().await;
+                    ps.capturing = false;
+                    ps.capture_id = None;
+                    ps.capture_history.push(history_entry.clone());
+                }
+
+                Json(json!({
+                    "capturing": false,
+                    "capture_id": capture_id,
+                    "workload_id": workload_id,
+                    "total_sessions": total_sessions,
+                    "total_queries": total_queries,
+                    "output": output_path.to_string_lossy(),
+                }))
+            }
+            Ok(Err(e)) => {
+                // Reset capturing state on error
+                let mut ps = proxy_state().write().await;
+                ps.capturing = false;
+                ps.capture_id = None;
+                Json(json!({ "error": e }))
+            }
+            Err(_) => Json(json!({ "error": "Proxy not responding" })),
+        }
+    }
 }

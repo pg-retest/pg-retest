@@ -1,0 +1,6 @@
+target/
+.git/
+*.wkl
+data/
+.openai/
+.worktrees/
