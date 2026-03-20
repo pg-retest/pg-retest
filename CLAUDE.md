@@ -100,6 +100,8 @@ Key modules:
 - `web::handlers::transform` — Transform API endpoints (analyze, plan, apply) for web dashboard
 - `web::handlers::tuning` — Tuning API endpoints (start, status, cancel) for web dashboard
 - `web::handlers::demo` — Demo mode handlers (wizard steps, scenario cards, DB reset)
+- `proxy::staging` — SQLite staging for capture data (batched insert, read-back, cleanup, crash recovery)
+- `proxy::control` — Minimal HTTP control endpoint for standalone persistent proxy
 
 ## Milestone Status
 
@@ -160,6 +162,11 @@ Key modules:
 - Demo mode: requires `PG_RETEST_DEMO=true` env var. Connection strings via `DEMO_DB_A`, `DEMO_DB_B`. Workload path via `DEMO_WORKLOAD`.
 - Demo page: wizard step state and scenario results are stored in-memory (reset on server restart).
 - Demo DB reset: drops and recreates all tables in DB-B by re-running init-db-b.sql.
+- Proxy persistent mode: `--persistent` keeps proxy running, capture toggled via `proxy-ctl` or web UI. Without `--persistent`, behavior is identical to before.
+- Proxy staging: capture data staged to SQLite (`capture_staging` table) instead of in-memory. Batched inserts (100 queries or 500ms). Crash recovery via `proxy-ctl recover`.
+- Proxy control port: standalone persistent proxy exposes HTTP control on `--control-port` (default 9091). Web mode uses existing `/api/v1/proxy/*` endpoints instead.
+- `proxy-ctl` auto-detects web vs standalone by trying `GET /api/v1/health`.
+- `no_capture` is `Arc<AtomicBool>` shared across all relay connections — toggled at runtime for persistent capture start/stop.
 
 ## Conventions
 

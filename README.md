@@ -401,6 +401,22 @@ Options:
 
 Stop with Ctrl+C (SIGINT) or SIGTERM -- the proxy writes the `.wkl` file on graceful shutdown.
 
+### Persistent Proxy Mode
+
+Run the proxy as a long-lived service — no traffic redirection needed for each capture:
+
+```bash
+# Start persistent proxy (no capture yet)
+pg-retest proxy --listen 0.0.0.0:5433 --target db:5432 --persistent
+
+# From another terminal: start/stop captures
+pg-retest proxy-ctl start-capture --proxy localhost:9091
+pg-retest proxy-ctl stop-capture --proxy localhost:9091 --output workload.wkl
+pg-retest proxy-ctl status --proxy localhost:9091
+```
+
+Captured queries are staged to SQLite to prevent OOM on long-running captures. Multiple sequential captures are supported without restarting the proxy. The proxy can also be controlled from the web dashboard's Proxy page.
+
 ### MySQL Slow Query Log Capture
 
 Capture workload from MySQL slow query logs and automatically transform SQL syntax to PostgreSQL-compatible format.
