@@ -242,6 +242,9 @@ sequenceDiagram
 | **AI workload transform** | Reshape workloads with AI (scale, inject, remove queries) |
 | **AI-assisted tuning** | LLM-powered config, index, query, and schema recommendations |
 | **Capacity planning** | Throughput QPS, latency percentiles, error rates at scale |
+| **Persistent proxy** | Always-on proxy with start/stop capture, SQLite staging, crash recovery |
+| **Capture safeguards** | Auto-stop on query count, DB size, or duration limits |
+| **Docker demo** | One-command demo with e-commerce data, guided wizard, and scenario cards |
 
 ---
 
@@ -259,6 +262,7 @@ sequenceDiagram
 | `web` | Launch the web dashboard |
 | `transform` | AI-powered workload transformation (analyze/plan/apply) |
 | `tune` | AI-assisted database tuning |
+| `proxy-ctl` | Control a running persistent proxy (start/stop capture, recover) |
 
 ---
 
@@ -781,11 +785,13 @@ pg-retest web --port 8080 --data-dir ./data
 # Open http://localhost:8080
 ```
 
-**11 pages:** Dashboard, Workloads, Proxy, Replay, A/B Testing, Compare, Pipeline, History, Transform, Tuning, Help.
+**12 pages:** Dashboard, Demo, Workloads, Proxy, Replay, A/B Testing, Compare, Pipeline, History, Transform, Tuning, Help.
 
 - Real-time updates via WebSocket (proxy traffic, replay progress, tuning iterations)
 - SQLite metadata storage with `.wkl` files as source of truth on disk
 - Frontend: Alpine.js + Chart.js + Tailwind CSS via CDN (no build step)
+- Demo page with guided wizard (explore → replay → compare → scale → tune) and scenario cards
+- Proxy page with capture toggle, state indicator, and capture history
 - Tuning page shows history with expandable recommendations and comparison stats
 
 ---
