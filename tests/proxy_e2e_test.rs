@@ -75,7 +75,7 @@ async fn start_proxy(
 
     let token_clone = cancel_token.clone();
     let handle =
-        tokio::spawn(async move { run_proxy_managed(config, token_clone, metrics_tx).await });
+        tokio::spawn(async move { run_proxy_managed(config, token_clone, metrics_tx, None).await });
 
     // Wait for proxy to be ready (accept connections)
     for _ in 0..50 {
@@ -390,7 +390,7 @@ async fn test_proxy_no_capture_mode() {
 
     let token_clone = cancel_token.clone();
     let handle =
-        tokio::spawn(async move { run_proxy_managed(config, token_clone, metrics_tx).await });
+        tokio::spawn(async move { run_proxy_managed(config, token_clone, metrics_tx, None).await });
 
     // Wait for proxy to be ready
     for _ in 0..50 {
@@ -462,7 +462,7 @@ async fn test_proxy_duration_shutdown() {
 
     let token_clone = cancel_token.clone();
     let handle =
-        tokio::spawn(async move { run_proxy_managed(config, token_clone, metrics_tx).await });
+        tokio::spawn(async move { run_proxy_managed(config, token_clone, metrics_tx, None).await });
 
     // Wait for proxy to be ready
     for _ in 0..50 {
