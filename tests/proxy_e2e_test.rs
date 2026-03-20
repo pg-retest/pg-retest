@@ -68,6 +68,9 @@ async fn start_proxy(
         duration: None,
         persistent: false,
         control_port: None,
+        max_capture_queries: 0,
+        max_capture_bytes: 0,
+        max_capture_duration: None,
     };
 
     let cancel_token = CancellationToken::new();
@@ -383,6 +386,9 @@ async fn test_proxy_no_capture_mode() {
         duration: None,
         persistent: false,
         control_port: None,
+        max_capture_queries: 0,
+        max_capture_bytes: 0,
+        max_capture_duration: None,
     };
 
     let cancel_token = CancellationToken::new();
@@ -455,6 +461,9 @@ async fn test_proxy_duration_shutdown() {
         duration: Some(std::time::Duration::from_secs(1)),
         persistent: false,
         control_port: None,
+        max_capture_queries: 0,
+        max_capture_bytes: 0,
+        max_capture_duration: None,
     };
 
     let cancel_token = CancellationToken::new();

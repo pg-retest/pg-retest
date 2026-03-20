@@ -94,6 +94,9 @@ pub async fn start_proxy(
         duration: None,
         persistent: false,
         control_port: None,
+        max_capture_queries: 0,
+        max_capture_bytes: 0,
+        max_capture_duration: None,
     };
 
     let listen = req.listen.clone();

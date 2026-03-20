@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use self::capture::{
@@ -40,6 +40,12 @@ pub struct ProxyConfig {
     pub duration: Option<std::time::Duration>,
     pub persistent: bool,
     pub control_port: Option<u16>,
+    /// Max queries before auto-stopping capture (0 = unlimited)
+    pub max_capture_queries: u64,
+    /// Max staging DB size in bytes before auto-stopping capture (0 = unlimited)
+    pub max_capture_bytes: u64,
+    /// Max capture duration before auto-stopping (None = unlimited)
+    pub max_capture_duration: Option<std::time::Duration>,
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
@@ -197,18 +203,34 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let active_staging_tx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedSender<CaptureEvent>>>> =
         Arc::new(tokio::sync::Mutex::new(None));
 
+    // Capture safeguard limits
+    let max_queries = config.max_capture_queries;
+    let max_bytes = config.max_capture_bytes;
+    let max_duration = config.max_capture_duration;
+
+    // Auto-stop channel: forwarder sends here when limits are exceeded
+    let (auto_stop_tx, auto_stop_rx) = mpsc::unbounded_channel::<String>(); // reason string
+
     // Spawn a forwarder task that reads from persistent_capture_rx, updates
-    // ControlState counters, and forwards to the active staging collector.
+    // ControlState counters, checks safeguard limits, and forwards to the active staging collector.
     let active_staging_tx_clone = active_staging_tx.clone();
     let control_state_fwd = control_state.clone();
+    let no_capture_fwd = no_capture.clone();
     let forwarder_handle = tokio::spawn(async move {
         let mut rx = persistent_capture_rx;
+        let mut capture_query_count: u64 = 0;
+        let mut capture_start: Option<Instant> = None;
+        let mut limit_triggered = false;
+
         while let Some(event) = rx.recv().await {
             // Update ControlState counters for status endpoint
             match &event {
                 CaptureEvent::SessionStart { .. } => {
                     let mut cs = control_state_fwd.write().await;
                     cs.active_sessions += 1;
+                    if capture_start.is_none() && cs.capturing {
+                        capture_start = Some(Instant::now());
+                    }
                 }
                 CaptureEvent::SessionEnd { .. } => {
                     let mut cs = control_state_fwd.write().await;
@@ -217,9 +239,32 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
                 CaptureEvent::QueryComplete { .. } | CaptureEvent::QueryError { .. } => {
                     let mut cs = control_state_fwd.write().await;
                     cs.total_queries += 1;
+                    capture_query_count += 1;
+
+                    // Check query count limit
+                    if !limit_triggered && max_queries > 0 && capture_query_count >= max_queries {
+                        limit_triggered = true;
+                        warn!("Capture safeguard: max query count ({}) reached, auto-stopping capture", max_queries);
+                        no_capture_fwd.store(true, Ordering::Relaxed);
+                        let _ = auto_stop_tx.send(format!("max_queries_reached ({})", max_queries));
+                    }
+
+                    // Check duration limit
+                    if !limit_triggered {
+                        if let (Some(max_dur), Some(start)) = (max_duration, capture_start) {
+                            if start.elapsed() >= max_dur {
+                                limit_triggered = true;
+                                warn!("Capture safeguard: max duration ({:?}) reached, auto-stopping capture", max_dur);
+                                no_capture_fwd.store(true, Ordering::Relaxed);
+                                let _ = auto_stop_tx
+                                    .send(format!("max_duration_reached ({:?})", max_dur));
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
+
             // Forward to active staging collector (if any)
             let guard = active_staging_tx_clone.lock().await;
             if let Some(ref tx) = *guard {
@@ -238,13 +283,27 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     );
     info!("Use POST http://localhost:{control_port}/start-capture to begin capturing");
 
-    // Main command loop — also listen for shutdown signals
+    // Wrap auto_stop_rx for use in select
+    let mut auto_stop_rx = auto_stop_rx;
+
+    // Main command loop — also listen for shutdown signals and auto-stop
     loop {
         let cmd = tokio::select! {
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(c) => c,
                     None => break, // Command channel closed
+                }
+            }
+            reason = auto_stop_rx.recv() => {
+                // Safeguard triggered — synthesize a Stop command
+                if let Some(reason) = reason {
+                    warn!("Auto-stopping capture: {reason}");
+                    // Create a dummy reply channel (we log the result ourselves)
+                    let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                    CaptureCommand::Stop { output: None, reply: reply_tx }
+                } else {
+                    continue;
                 }
             }
             _ = async {

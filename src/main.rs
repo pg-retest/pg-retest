@@ -272,10 +272,38 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         } else {
             None
         },
+        max_capture_queries: args.max_capture_queries,
+        max_capture_bytes: parse_size_string(&args.max_capture_size),
+        max_capture_duration: args
+            .max_capture_duration
+            .as_deref()
+            .and_then(|s| parse_duration(s).ok()),
     };
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_proxy(config))
+}
+
+/// Parse a human-readable size string (e.g., "500MB", "1GB", "0") into bytes.
+fn parse_size_string(s: &str) -> u64 {
+    let s = s.trim().to_uppercase();
+    if s == "0" || s.is_empty() {
+        return 0;
+    }
+    let (num_str, multiplier) = if s.ends_with("GB") {
+        (&s[..s.len() - 2], 1_073_741_824u64)
+    } else if s.ends_with("MB") {
+        (&s[..s.len() - 2], 1_048_576u64)
+    } else if s.ends_with("KB") {
+        (&s[..s.len() - 2], 1_024u64)
+    } else {
+        (s.as_str(), 1u64) // raw bytes
+    };
+    num_str
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0)
+        .saturating_mul(multiplier)
 }
 
 fn cmd_run(args: pg_retest::cli::RunArgs) -> Result<()> {

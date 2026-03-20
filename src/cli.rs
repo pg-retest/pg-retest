@@ -216,6 +216,18 @@ pub struct ProxyArgs {
     /// Control port for persistent mode (default: 9091)
     #[arg(long, default_value_t = 9091)]
     pub control_port: u16,
+
+    /// Auto-stop capture after this many queries (0 = unlimited)
+    #[arg(long, default_value_t = 0)]
+    pub max_capture_queries: u64,
+
+    /// Auto-stop capture when staging DB exceeds this size (e.g., 500MB, 1GB). 0 = unlimited.
+    #[arg(long, default_value = "0")]
+    pub max_capture_size: String,
+
+    /// Auto-stop capture after this duration (e.g., 30m, 2h). Unlimited if not set.
+    #[arg(long)]
+    pub max_capture_duration: Option<String>,
 }
 
 #[derive(clap::Args)]
