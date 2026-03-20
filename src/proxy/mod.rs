@@ -1,5 +1,6 @@
 pub mod capture;
 pub mod connection;
+pub mod control;
 pub mod listener;
 pub mod pool;
 pub mod protocol;
