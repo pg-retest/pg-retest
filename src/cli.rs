@@ -101,6 +101,10 @@ pub struct ReplayArgs {
     #[arg(long)]
     pub target: String,
 
+    /// Read target connection string from this environment variable
+    #[arg(long)]
+    pub target_env: Option<String>,
+
     /// Output results profile path (.wkl)
     #[arg(short, long, default_value = "results.wkl")]
     pub output: PathBuf,
@@ -382,6 +386,10 @@ pub struct TuneArgs {
     /// Target PostgreSQL connection string
     #[arg(long)]
     pub target: String,
+
+    /// Read target connection string from this environment variable
+    #[arg(long)]
+    pub target_env: Option<String>,
 
     /// LLM provider: claude, openai, gemini, bedrock, ollama
     #[arg(long, default_value = "claude")]

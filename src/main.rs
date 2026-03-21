@@ -91,6 +91,17 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     use pg_retest::replay::scaling::{check_write_safety, scale_sessions};
     use pg_retest::replay::{session::run_replay, ReplayMode};
 
+    let target = if let Some(env_var) = &args.target_env {
+        std::env::var(env_var).map_err(|_| {
+            anyhow::anyhow!(
+                "Environment variable '{}' not set (specified via --target-env)",
+                env_var
+            )
+        })?
+    } else {
+        args.target.clone()
+    };
+
     let profile = io::read_profile(&args.workload)?;
     let mode = if args.read_only {
         ReplayMode::ReadOnly
@@ -167,7 +178,7 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
 
     println!(
         "Replaying {} sessions ({} queries) against {}",
-        replay_profile.metadata.total_sessions, replay_profile.metadata.total_queries, args.target
+        replay_profile.metadata.total_sessions, replay_profile.metadata.total_queries, target
     );
     println!("Mode: {:?}, Speed: {}x", mode, args.speed);
 
@@ -178,7 +189,7 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     let replay_start = std::time::Instant::now();
     let results = rt.block_on(run_replay(
         &replay_profile,
-        &args.target,
+        &target,
         mode,
         args.speed,
         args.max_connections,
@@ -564,6 +575,17 @@ fn cmd_transform(args: pg_retest::cli::TransformArgs) -> Result<()> {
 }
 
 fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
+    let target = if let Some(env_var) = &args.target_env {
+        std::env::var(env_var).map_err(|_| {
+            anyhow::anyhow!(
+                "Environment variable '{}' not set (specified via --target-env)",
+                env_var
+            )
+        })?
+    } else {
+        args.target.clone()
+    };
+
     let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
     let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
 
@@ -619,7 +641,7 @@ fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
 
     let config = pg_retest::tuner::types::TuningConfig {
         workload_path: args.workload,
-        target: args.target,
+        target,
         provider: args.provider,
         api_key,
         api_url: args.api_url,
