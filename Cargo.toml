@@ -1,8 +1,15 @@
 [package]
 name = "pg-retest"
-version = "0.2.0"
+version = "1.0.0-rc.1"
 edition = "2021"
 description = "Capture, replay, and compare PostgreSQL workloads"
+license = "Apache-2.0"
+repository = "https://github.com/pg-retest/pg-retest"
+homepage = "https://github.com/pg-retest/pg-retest"
+readme = "README.md"
+keywords = ["postgres", "testing", "workload", "benchmarking", "migration"]
+categories = ["command-line-utilities", "database"]
+authors = ["TheYonk"]
 
 [dependencies]
 anyhow = "1"
