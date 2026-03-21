@@ -11,7 +11,7 @@ pg-retest ships with a self-contained Docker demo that lets you explore every fe
 ## Quick Start
 
 ```bash
-git clone https://github.com/your-org/pg-retest.git
+git clone https://github.com/pg-retest/pg-retest.git
 cd pg-retest
 
 # Build and start the demo (first build takes ~5 minutes)
