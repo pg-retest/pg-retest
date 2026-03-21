@@ -62,7 +62,7 @@ pub async fn reset_db(
     })?;
 
     // Connect to DB-B
-    let client = crate::tuner::context::connect(&dc.db_b)
+    let client = crate::tuner::context::connect(&dc.db_b, None)
         .await
         .map_err(|e| {
             tracing::error!("Failed to connect to DB-B: {}", e);
@@ -281,6 +281,7 @@ async fn run_step_replay(
         &dc.db_b,
         crate::replay::ReplayMode::ReadWrite,
         1.0,
+        None,
     )
     .await
     .map_err(|e| {
@@ -389,6 +390,7 @@ async fn run_step_scale(
         &dc.db_b,
         crate::replay::ReplayMode::ReadOnly,
         1.0,
+        None,
     )
     .await
     .map_err(|e| {
@@ -415,7 +417,7 @@ async fn run_step_tune(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let client = crate::tuner::context::connect(&dc.db_b)
+    let client = crate::tuner::context::connect(&dc.db_b, None)
         .await
         .map_err(|e| {
             tracing::error!("Failed to connect to DB-B for tuning context: {}", e);
@@ -458,6 +460,7 @@ async fn run_scenario_migration(
         &dc.db_b,
         crate::replay::ReplayMode::ReadWrite,
         1.0,
+        None,
     )
     .await
     .map_err(|e| {
@@ -497,6 +500,7 @@ async fn run_scenario_ab(
         &dc.db_a,
         crate::replay::ReplayMode::ReadOnly,
         1.0,
+        None,
     )
     .await
     .map_err(|e| {
@@ -510,6 +514,7 @@ async fn run_scenario_ab(
         &dc.db_b,
         crate::replay::ReplayMode::ReadOnly,
         1.0,
+        None,
     )
     .await
     .map_err(|e| {

@@ -279,6 +279,7 @@ fn run_replay_step(
             connection_string,
             mode,
             config.replay.speed,
+            None,
         ))
         .map_err(|e| anyhow::anyhow!("Replay error: {e}"))?;
 
@@ -339,6 +340,7 @@ fn run_ab_pipeline(
                 &variant.target,
                 mode,
                 config.replay.speed,
+                None,
             ))
             .map_err(|e| anyhow::anyhow!("Replay error for '{}': {e}", variant.label))?;
         variant_results.push(VariantResult::from_results(variant.label.clone(), results));

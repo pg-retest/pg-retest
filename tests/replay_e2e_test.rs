@@ -90,7 +90,7 @@ async fn test_replay_session_basic_selects() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start)
+    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
         .await
         .expect("replay_session should succeed");
 
@@ -155,7 +155,7 @@ async fn test_replay_session_dml_execution() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start)
+    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
         .await
         .expect("DML replay should succeed");
 
@@ -212,7 +212,7 @@ async fn test_replay_session_transaction_commit() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start)
+    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
         .await
         .expect("Transaction replay should succeed");
 
@@ -261,7 +261,7 @@ async fn test_replay_session_failed_transaction_auto_rollback() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start)
+    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
         .await
         .expect("Replay should complete (with errors)");
 
@@ -369,7 +369,7 @@ async fn test_run_replay_parallel_sessions() {
         },
     ]);
 
-    let results = run_replay(&profile, CONN_STR, ReplayMode::ReadWrite, 0.0)
+    let results = run_replay(&profile, CONN_STR, ReplayMode::ReadWrite, 0.0, None)
         .await
         .expect("Parallel replay should succeed");
 
@@ -431,7 +431,7 @@ async fn test_replay_read_only_mode_skips_dml() {
         ],
     }]);
 
-    let results = run_replay(&profile, CONN_STR, ReplayMode::ReadOnly, 0.0)
+    let results = run_replay(&profile, CONN_STR, ReplayMode::ReadOnly, 0.0, None)
         .await
         .expect("Read-only replay should succeed");
 
@@ -495,17 +495,31 @@ async fn test_replay_speed_multiplier() {
     // Replay at max speed (speed=0) — should be nearly instant
     let start_fast = std::time::Instant::now();
     let start_tok = TokioInstant::now();
-    let _ = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start_tok)
-        .await
-        .expect("Fast replay should succeed");
+    let _ = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start_tok,
+        None,
+    )
+    .await
+    .expect("Fast replay should succeed");
     let fast_elapsed = start_fast.elapsed();
 
     // Replay at 1x speed — should take ~200ms (the offset of the last query)
     let start_normal = std::time::Instant::now();
     let start_tok2 = TokioInstant::now();
-    let _ = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 1.0, start_tok2)
-        .await
-        .expect("Normal speed replay should succeed");
+    let _ = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        1.0,
+        start_tok2,
+        None,
+    )
+    .await
+    .expect("Normal speed replay should succeed");
     let normal_elapsed = start_normal.elapsed();
 
     // 1x speed should take noticeably longer than max speed
@@ -542,6 +556,7 @@ async fn test_replay_session_bad_connection_string() {
         ReplayMode::ReadWrite,
         0.0,
         start,
+        None,
     )
     .await;
 
@@ -574,7 +589,7 @@ async fn test_replay_session_query_error_continues() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start)
+    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
         .await
         .expect("Replay should complete despite query errors");
 
@@ -629,7 +644,7 @@ async fn test_replay_session_multiple_transactions() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start)
+    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
         .await
         .expect("Multi-transaction replay should complete");
 

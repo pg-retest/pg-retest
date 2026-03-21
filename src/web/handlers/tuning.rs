@@ -59,6 +59,7 @@ pub async fn start_tuning(
         force: false, // Web UI never allows force
         speed: req.speed.unwrap_or(1.0),
         read_only: req.read_only.unwrap_or(false),
+        tls: None,
     };
 
     let state_clone = state.clone();

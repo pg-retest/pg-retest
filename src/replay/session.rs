@@ -3,6 +3,7 @@ use std::time::Instant;
 use anyhow::Result;
 use tokio::time::{sleep_until, Instant as TokioInstant};
 use tokio_postgres::NoTls;
+use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::{debug, warn};
 
 use crate::profile::{QueryKind, Session};
@@ -14,8 +15,13 @@ pub async fn replay_session(
     mode: ReplayMode,
     speed: f64,
     replay_start: TokioInstant,
+    tls: Option<MakeRustlsConnect>,
 ) -> Result<ReplayResults> {
-    let (client, connection) = tokio_postgres::connect(connection_string, NoTls).await?;
+    let (client, connection) = if let Some(tls_connector) = tls {
+        tokio_postgres::connect(connection_string, tls_connector).await?
+    } else {
+        tokio_postgres::connect(connection_string, NoTls).await?
+    };
 
     // Spawn the connection handler
     tokio::spawn(async move {
@@ -114,6 +120,7 @@ pub async fn run_replay(
     connection_string: &str,
     mode: ReplayMode,
     speed: f64,
+    tls: Option<MakeRustlsConnect>,
 ) -> Result<Vec<ReplayResults>> {
     let replay_start = TokioInstant::now();
     let mut handles = Vec::new();
@@ -121,9 +128,10 @@ pub async fn run_replay(
     for session in &profile.sessions {
         let session = session.clone();
         let conn_str = connection_string.to_string();
+        let tls_clone = tls.clone();
 
         let handle = tokio::spawn(async move {
-            replay_session(&session, &conn_str, mode, speed, replay_start).await
+            replay_session(&session, &conn_str, mode, speed, replay_start, tls_clone).await
         });
 
         handles.push(handle);

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 /// A single tuning recommendation from the LLM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +82,7 @@ pub struct TuningConfig {
     pub force: bool,
     pub speed: f64,
     pub read_only: bool,
+    pub tls: Option<MakeRustlsConnect>,
 }
 
 /// Events emitted during tuning for real-time progress reporting.

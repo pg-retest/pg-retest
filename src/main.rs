@@ -171,9 +171,18 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     );
     println!("Mode: {:?}, Speed: {}x", mode, args.speed);
 
+    let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
+    let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
+
     let rt = tokio::runtime::Runtime::new()?;
     let replay_start = std::time::Instant::now();
-    let results = rt.block_on(run_replay(&replay_profile, &args.target, mode, args.speed))?;
+    let results = rt.block_on(run_replay(
+        &replay_profile,
+        &args.target,
+        mode,
+        args.speed,
+        tls,
+    ))?;
     let elapsed_us = replay_start.elapsed().as_micros() as u64;
 
     let total_replayed: usize = results.iter().map(|r| r.query_results.len()).sum();
@@ -366,7 +375,7 @@ fn cmd_ab(args: pg_retest::cli::ABArgs) -> Result<()> {
 
     for (label, conn_string) in &parsed_variants {
         println!("Replaying variant '{label}' against {conn_string}...");
-        let results = rt.block_on(run_replay(&profile, conn_string, mode, args.speed))?;
+        let results = rt.block_on(run_replay(&profile, conn_string, mode, args.speed, None))?;
         variant_results.push(VariantResult::from_results(label.clone(), results));
     }
 
@@ -547,6 +556,9 @@ fn cmd_transform(args: pg_retest::cli::TransformArgs) -> Result<()> {
 }
 
 fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
+    let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
+    let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
+
     let config = pg_retest::tuner::types::TuningConfig {
         workload_path: args.workload,
         target: args.target,
@@ -560,6 +572,7 @@ fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
         force: args.force,
         speed: args.speed,
         read_only: args.read_only,
+        tls,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

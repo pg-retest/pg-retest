@@ -136,6 +136,14 @@ pub struct ReplayArgs {
     /// Scale bulk sessions by N (per-category scaling)
     #[arg(long)]
     pub scale_bulk: Option<u32>,
+
+    /// TLS mode for target database connection: disable, prefer, require
+    #[arg(long, default_value = "prefer")]
+    pub tls_mode: String,
+
+    /// Path to CA certificate file for TLS verification
+    #[arg(long)]
+    pub tls_ca_cert: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -414,6 +422,14 @@ pub struct TuneArgs {
     /// Replay only SELECT queries
     #[arg(long, default_value_t = false)]
     pub read_only: bool,
+
+    /// TLS mode for target database connection: disable, prefer, require
+    #[arg(long, default_value = "prefer")]
+    pub tls_mode: String,
+
+    /// Path to CA certificate file for TLS verification
+    #[arg(long)]
+    pub tls_ca_cert: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

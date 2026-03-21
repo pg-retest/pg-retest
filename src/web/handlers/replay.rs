@@ -228,7 +228,7 @@ async fn run_replay_task(
         let session = session.clone();
         let conn_str = target.to_string();
         let handle = tokio::spawn(async move {
-            replay_session(&session, &conn_str, mode, speed, replay_start).await
+            replay_session(&session, &conn_str, mode, speed, replay_start, None).await
         });
         handles.push(handle);
     }

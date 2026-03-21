@@ -63,7 +63,7 @@ pub async fn run_tuning_with_events(
     });
 
     // 6. Connect to target
-    let client = connect(&config.target).await?;
+    let client = connect(&config.target, config.tls.clone()).await?;
 
     // 7. Collect baseline: replay once to get baseline metrics
     let replay_mode = if config.read_only {
@@ -74,8 +74,14 @@ pub async fn run_tuning_with_events(
 
     println!("  Collecting baseline replay...");
     send_event(TuningEvent::BaselineStarted);
-    let baseline_results =
-        replay::session::run_replay(&profile, &config.target, replay_mode, config.speed).await?;
+    let baseline_results = replay::session::run_replay(
+        &profile,
+        &config.target,
+        replay_mode,
+        config.speed,
+        config.tls.clone(),
+    )
+    .await?;
 
     let baseline_report = compare::compute_comparison(&profile, &baseline_results, 20.0);
 
@@ -193,9 +199,14 @@ pub async fn run_tuning_with_events(
 
         // Replay after changes
         println!("  Replaying workload...");
-        let replay_results =
-            replay::session::run_replay(&profile, &config.target, replay_mode, config.speed)
-                .await?;
+        let replay_results = replay::session::run_replay(
+            &profile,
+            &config.target,
+            replay_mode,
+            config.speed,
+            config.tls.clone(),
+        )
+        .await?;
 
         let iter_report = compare::compute_comparison(&profile, &replay_results, 20.0);
 
