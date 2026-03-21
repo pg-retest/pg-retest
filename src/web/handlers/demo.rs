@@ -397,8 +397,7 @@ async fn run_step_scale(
     })?;
     let elapsed_us = start.elapsed().as_micros() as u64;
 
-    let scale_report =
-        crate::compare::capacity::compute_scale_report(&results, 3, elapsed_us);
+    let scale_report = crate::compare::capacity::compute_scale_report(&results, 3, elapsed_us);
     let value = serde_json::to_value(&scale_report).map_err(|e| {
         tracing::error!("Failed to serialize scale report: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR

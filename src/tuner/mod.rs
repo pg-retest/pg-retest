@@ -241,7 +241,10 @@ pub async fn run_tuning_with_events(
         let should_stop = comparison.p95_change_pct > 5.0;
 
         if should_stop {
-            println!("  p95 latency regressed by {:.1}%. Rolling back changes...", comparison.p95_change_pct);
+            println!(
+                "  p95 latency regressed by {:.1}%. Rolling back changes...",
+                comparison.p95_change_pct
+            );
             send_event(TuningEvent::RollbackStarted { iteration: i });
 
             let rollback_results = rollback_all(&client, &applied).await;
@@ -252,11 +255,19 @@ pub async fn run_tuning_with_events(
                 if r.success {
                     println!("    Rolled back: {}", r.summary);
                 } else {
-                    println!("    Rollback FAILED: {} — {}", r.summary, r.error.as_deref().unwrap_or("unknown"));
+                    println!(
+                        "    Rollback FAILED: {} — {}",
+                        r.summary,
+                        r.error.as_deref().unwrap_or("unknown")
+                    );
                 }
             }
             println!("  Rollback: {} succeeded, {} failed", rolled_back, failed);
-            send_event(TuningEvent::RollbackCompleted { iteration: i, rolled_back, failed });
+            send_event(TuningEvent::RollbackCompleted {
+                iteration: i,
+                rolled_back,
+                failed,
+            });
 
             // Reload config after rollback
             let _ = client.batch_execute("SELECT pg_reload_conf()").await;
