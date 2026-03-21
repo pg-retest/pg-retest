@@ -220,7 +220,7 @@ fn cmd_compare(args: pg_retest::cli::CompareArgs) -> Result<()> {
     let replay_bytes = std::fs::read(&args.replay)?;
     let results: Vec<ReplayResults> = rmp_serde::from_slice(&replay_bytes)?;
 
-    let report_data = compute_comparison(&source, &results, args.threshold);
+    let report_data = compute_comparison(&source, &results, args.threshold, None);
     report::print_terminal_report(&report_data);
 
     if let Some(json_path) = &args.json {

@@ -85,7 +85,7 @@ fn run_pipeline_inner(config: &PipelineConfig) -> Result<PipelineResult> {
         .thresholds
         .as_ref()
         .map_or(20.0, |t| t.regression_threshold_pct);
-    let comparison = compute_comparison(&replay_profile, &results, threshold_pct);
+    let comparison = compute_comparison(&replay_profile, &results, threshold_pct, None);
     report::print_terminal_report(&comparison);
 
     // ── Step 5: Evaluate thresholds ─────────────────────────────────

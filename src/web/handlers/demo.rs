@@ -343,7 +343,7 @@ async fn run_step_compare(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let comparison = crate::compare::compute_comparison(&profile, &results, 20.0);
+    let comparison = crate::compare::compute_comparison(&profile, &results, 20.0, None);
     let value = serde_json::to_value(&comparison).map_err(|e| {
         tracing::error!("Failed to serialize comparison: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
@@ -471,7 +471,7 @@ async fn run_scenario_migration(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let comparison = crate::compare::compute_comparison(&profile, &results, 20.0);
+    let comparison = crate::compare::compute_comparison(&profile, &results, 20.0, None);
     let value = serde_json::to_value(&comparison).map_err(|e| {
         tracing::error!("Failed to serialize comparison: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR

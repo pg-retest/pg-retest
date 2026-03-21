@@ -259,7 +259,7 @@ async fn run_replay_task(
     std::fs::write(&results_path, bytes)?;
 
     // Compute comparison
-    let comparison = crate::compare::compute_comparison(&profile, &all_results, 20.0);
+    let comparison = crate::compare::compute_comparison(&profile, &all_results, 20.0, None);
     let report_json = serde_json::to_string(&comparison)?;
 
     let now = chrono::Utc::now().to_rfc3339();

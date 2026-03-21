@@ -84,7 +84,8 @@ pub async fn run_tuning_with_events(
     )
     .await?;
 
-    let baseline_report = compare::compute_comparison(&profile, &baseline_results, 20.0);
+    let baseline_report =
+        compare::compute_comparison(&profile, &baseline_results, 20.0, Some(replay_mode));
 
     let mut iterations: Vec<TuningIteration> = Vec::new();
     let mut all_changes: Vec<AppliedChange> = Vec::new();
@@ -210,7 +211,8 @@ pub async fn run_tuning_with_events(
         )
         .await?;
 
-        let iter_report = compare::compute_comparison(&profile, &replay_results, 20.0);
+        let iter_report =
+            compare::compute_comparison(&profile, &replay_results, 20.0, Some(replay_mode));
 
         // Compare vs baseline
         let comparison = ComparisonSummary {
