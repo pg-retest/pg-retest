@@ -49,7 +49,7 @@ graph LR
 No Rust toolchain needed — just Docker.
 
 ```bash
-git clone https://github.com/your-org/pg-retest.git
+git clone https://github.com/pg-retest/pg-retest.git
 cd pg-retest
 
 # Build and start the demo (first build takes ~5 minutes)
@@ -76,7 +76,7 @@ See the [Demo Environment Guide](docs/demo.md) for full details, CLI examples, a
 ### Install & Build
 
 ```bash
-git clone https://github.com/your-org/pg-retest.git
+git clone https://github.com/pg-retest/pg-retest.git
 cd pg-retest
 cargo build --release
 
