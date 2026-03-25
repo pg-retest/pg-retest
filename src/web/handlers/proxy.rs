@@ -298,6 +298,9 @@ async fn run_metrics_consumer(
                     ps.total_queries = query_count;
                 }
             }
+            CaptureEvent::QueryReturning { .. } => {
+                // RETURNING data is handled by the capture collector, not metrics.
+            }
             CaptureEvent::SessionEnd { session_id } => {
                 active_sessions = active_sessions.saturating_sub(1);
                 let qcount = session_query_counts.remove(&session_id).unwrap_or(0);

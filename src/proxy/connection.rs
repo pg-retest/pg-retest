@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -7,14 +7,41 @@ use anyhow::Result;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, warn};
 
 use super::capture::CaptureEvent;
 use super::pool::SessionPool;
 use super::protocol::{
-    self, extract_bind, extract_error_message, extract_parse, extract_query_sql,
-    format_bind_params, inline_bind_params, StartupType,
+    self, extract_bind, extract_data_row, extract_error_message, extract_parse, extract_query_sql,
+    extract_row_description, format_bind_params, inline_bind_params, StartupType,
 };
+use crate::correlate::capture::has_returning;
+
+/// Shared state for RETURNING clause detection and DataRow capture.
+///
+/// Created when `IdMode::Correlate` or `IdMode::Full` is active.
+/// Tracks a queue of booleans (one per query/parse) indicating whether
+/// the query has a RETURNING clause, and accumulates column descriptions
+/// and row data from the server response.
+pub struct CorrelateState {
+    /// FIFO of booleans: true if the query at this position has RETURNING.
+    returning_queue: TokioMutex<VecDeque<bool>>,
+    /// Column names from the most recent RowDescription (if RETURNING).
+    pending_columns: TokioMutex<Vec<String>>,
+    /// Accumulated data rows from DataRow messages (if RETURNING).
+    pending_rows: TokioMutex<Vec<Vec<Option<String>>>>,
+}
+
+impl CorrelateState {
+    pub fn new() -> Self {
+        Self {
+            returning_queue: TokioMutex::new(VecDeque::new()),
+            pending_columns: TokioMutex::new(Vec::new()),
+            pending_rows: TokioMutex::new(Vec::new()),
+        }
+    }
+}
 
 /// Handle a single client connection through its full lifecycle.
 pub async fn handle_connection(
@@ -24,6 +51,7 @@ pub async fn handle_connection(
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
+    correlate: Option<Arc<CorrelateState>>,
 ) {
     if let Err(e) = handle_connection_inner(
         client_stream,
@@ -32,6 +60,7 @@ pub async fn handle_connection(
         capture_tx,
         no_capture,
         metrics_tx,
+        correlate,
     )
     .await
     {
@@ -46,6 +75,7 @@ async fn handle_connection_inner(
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
+    correlate: Option<Arc<CorrelateState>>,
 ) -> Result<()> {
     // ── Phase 1: Startup ────────────────────────────────────────────
     // Read the first message from client (no type byte — startup message)
@@ -134,6 +164,7 @@ async fn handle_connection_inner(
         let metrics_tx = metrics_tx.clone();
         let stmt_cache = stmt_cache.clone();
         let no_capture = no_capture.clone();
+        let correlate = correlate.clone();
         async move {
             relay_client_to_server(
                 client_read,
@@ -143,6 +174,7 @@ async fn handle_connection_inner(
                 stmt_cache,
                 no_capture,
                 metrics_tx,
+                correlate,
             )
             .await
         }
@@ -157,6 +189,7 @@ async fn handle_connection_inner(
             capture_tx2,
             no_capture,
             metrics_tx2,
+            correlate,
         )
         .await
     });
@@ -237,6 +270,7 @@ async fn relay_client_to_server(
     stmt_cache: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
+    correlate: Option<Arc<CorrelateState>>,
 ) -> Result<()> {
     loop {
         let msg = match protocol::read_message(&mut client).await? {
@@ -249,6 +283,11 @@ async fn relay_client_to_server(
                 b'Q' => {
                     // Simple query
                     if let Some(sql) = extract_query_sql(&msg) {
+                        // Track RETURNING for correlation
+                        if let Some(ref cs) = correlate {
+                            let has_ret = has_returning(&sql);
+                            cs.returning_queue.lock().await.push_back(has_ret);
+                        }
                         let event = CaptureEvent::QueryStart {
                             session_id,
                             sql,
@@ -263,6 +302,11 @@ async fn relay_client_to_server(
                 b'P' => {
                     // Parse (prepared statement) — cache name→SQL mapping
                     if let Some(parsed) = extract_parse(&msg) {
+                        // Track RETURNING for correlation
+                        if let Some(ref cs) = correlate {
+                            let has_ret = has_returning(&parsed.sql);
+                            cs.returning_queue.lock().await.push_back(has_ret);
+                        }
                         let mut cache = stmt_cache.lock().await;
                         cache.insert(parsed.statement_name, parsed.sql);
                     }
@@ -311,6 +355,11 @@ async fn relay_client_to_server(
     Ok(())
 }
 
+/// Maximum number of columns to capture from RETURNING clause.
+const MAX_RETURNING_COLUMNS: usize = 20;
+/// Maximum number of rows to capture from RETURNING clause.
+const MAX_RETURNING_ROWS: usize = 100;
+
 /// Relay messages from server to client, extracting capture data.
 async fn relay_server_to_client(
     mut server: BufReader<ReadHalf<TcpStream>>,
@@ -319,6 +368,7 @@ async fn relay_server_to_client(
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
+    correlate: Option<Arc<CorrelateState>>,
 ) -> Result<()> {
     loop {
         let msg = match protocol::read_message(&mut server).await? {
@@ -328,8 +378,68 @@ async fn relay_server_to_client(
 
         if !no_capture.load(Ordering::Relaxed) {
             match msg.msg_type {
+                b'T' => {
+                    // RowDescription — if correlation is active and front of queue is true,
+                    // capture column names for RETURNING clause.
+                    if let Some(ref cs) = correlate {
+                        let queue = cs.returning_queue.lock().await;
+                        if queue.front() == Some(&true) {
+                            if let Some(mut columns) = extract_row_description(&msg) {
+                                columns.truncate(MAX_RETURNING_COLUMNS);
+                                let mut pending = cs.pending_columns.lock().await;
+                                *pending = columns;
+                                // Clear any stale rows
+                                cs.pending_rows.lock().await.clear();
+                            }
+                        }
+                    }
+                }
+                b'D' => {
+                    // DataRow — if we have pending columns (RETURNING active), accumulate row data.
+                    if let Some(ref cs) = correlate {
+                        let pending_cols = cs.pending_columns.lock().await;
+                        if !pending_cols.is_empty() {
+                            let num_cols = pending_cols.len();
+                            drop(pending_cols); // Release lock before acquiring rows lock
+                            if let Some(values) = extract_data_row(&msg, num_cols) {
+                                let mut rows = cs.pending_rows.lock().await;
+                                if rows.len() < MAX_RETURNING_ROWS {
+                                    rows.push(values);
+                                }
+                            }
+                        }
+                    }
+                }
                 b'C' => {
-                    // CommandComplete — query finished
+                    // CommandComplete — query finished.
+                    // If correlation is active, pop the queue and emit QueryReturning if needed.
+                    if let Some(ref cs) = correlate {
+                        let was_returning =
+                            cs.returning_queue.lock().await.pop_front().unwrap_or(false);
+                        if was_returning {
+                            let columns = {
+                                let mut pending = cs.pending_columns.lock().await;
+                                std::mem::take(&mut *pending)
+                            };
+                            let rows = {
+                                let mut pending = cs.pending_rows.lock().await;
+                                std::mem::take(&mut *pending)
+                            };
+                            if !rows.is_empty() {
+                                let event = CaptureEvent::QueryReturning {
+                                    session_id,
+                                    columns,
+                                    rows,
+                                    timestamp: Instant::now(),
+                                };
+                                if let Some(ref mtx) = metrics_tx {
+                                    let _ = mtx.send(event.clone());
+                                }
+                                let _ = capture_tx.send(event);
+                            }
+                        }
+                    }
+
                     let event = CaptureEvent::QueryComplete {
                         session_id,
                         timestamp: Instant::now(),
@@ -341,6 +451,13 @@ async fn relay_server_to_client(
                 }
                 b'E' => {
                     // ErrorResponse
+                    // Clear correlation state on error
+                    if let Some(ref cs) = correlate {
+                        let _ = cs.returning_queue.lock().await.pop_front();
+                        cs.pending_columns.lock().await.clear();
+                        cs.pending_rows.lock().await.clear();
+                    }
+
                     if let Some(err_msg) = extract_error_message(&msg) {
                         let event = CaptureEvent::QueryError {
                             session_id,

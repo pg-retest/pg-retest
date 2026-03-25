@@ -25,6 +25,8 @@ pub struct StagingRow {
     pub is_error: bool,
     pub error_message: Option<String>,
     pub timestamp_us: i64,
+    /// JSON-serialized `Vec<ResponseRow>` from RETURNING clause capture.
+    pub response_values_json: Option<String>,
 }
 
 /// SQLite-backed staging storage for captured proxy queries.
@@ -56,7 +58,8 @@ impl StagingDb {
                 duration_us INTEGER NOT NULL,
                 is_error INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
-                timestamp_us INTEGER NOT NULL
+                timestamp_us INTEGER NOT NULL,
+                response_values_json TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_staging_capture ON capture_staging(capture_id);
@@ -75,8 +78,9 @@ impl StagingDb {
             let mut stmt = tx.prepare_cached(
                 "INSERT INTO capture_staging
                  (capture_id, session_id, user_name, database_name, sql, kind,
-                  start_offset_us, duration_us, is_error, error_message, timestamp_us)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                  start_offset_us, duration_us, is_error, error_message, timestamp_us,
+                  response_values_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )?;
             for r in rows {
                 stmt.execute(rusqlite::params![
@@ -91,6 +95,7 @@ impl StagingDb {
                     r.is_error as i32,
                     r.error_message,
                     r.timestamp_us,
+                    r.response_values_json,
                 ])?;
             }
         }
@@ -103,7 +108,8 @@ impl StagingDb {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "SELECT capture_id, session_id, user_name, database_name, sql, kind,
-                    start_offset_us, duration_us, is_error, error_message, timestamp_us
+                    start_offset_us, duration_us, is_error, error_message, timestamp_us,
+                    response_values_json
              FROM capture_staging
              WHERE capture_id = ?1
              ORDER BY timestamp_us",
@@ -123,6 +129,7 @@ impl StagingDb {
                     is_error: is_error_int != 0,
                     error_message: row.get(9)?,
                     timestamp_us: row.get(10)?,
+                    response_values_json: row.get(11)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -191,7 +198,8 @@ mod tests {
                 duration_us INTEGER NOT NULL,
                 is_error INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
-                timestamp_us INTEGER NOT NULL
+                timestamp_us INTEGER NOT NULL,
+                response_values_json TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_staging_capture ON capture_staging(capture_id);
@@ -214,6 +222,7 @@ mod tests {
             is_error: false,
             error_message: None,
             timestamp_us,
+            response_values_json: None,
         }
     }
 
@@ -294,6 +303,7 @@ mod tests {
             is_error: true,
             error_message: Some("relation \"bad_table\" does not exist".to_string()),
             timestamp_us: 5000,
+            response_values_json: None,
         }];
 
         db.insert_batch(&rows).await.unwrap();
