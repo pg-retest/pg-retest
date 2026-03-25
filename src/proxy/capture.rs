@@ -570,6 +570,114 @@ mod tests {
         assert!(queries[0].duration_us >= 400); // 600 - 100 = 500, allow slack
     }
 
+    #[tokio::test]
+    async fn test_collector_query_returning_after_complete() {
+        // Regression test: QueryReturning must arrive AFTER QueryComplete
+        // so the query is already in state.queries when we try to attach.
+        let (tx, rx) = mpsc::unbounded_channel();
+        let now = Instant::now();
+
+        tx.send(CaptureEvent::SessionStart {
+            session_id: 1,
+            user: "app".into(),
+            database: "mydb".into(),
+            timestamp: now,
+        })
+        .unwrap();
+
+        tx.send(CaptureEvent::QueryStart {
+            session_id: 1,
+            sql: "INSERT INTO orders (name) VALUES ('test') RETURNING id".into(),
+            timestamp: now + std::time::Duration::from_micros(100),
+        })
+        .unwrap();
+
+        // QueryComplete arrives first (moves pending_sql into queries vec)
+        tx.send(CaptureEvent::QueryComplete {
+            session_id: 1,
+            timestamp: now + std::time::Duration::from_micros(600),
+        })
+        .unwrap();
+
+        // QueryReturning arrives after (attaches to last query in vec)
+        tx.send(CaptureEvent::QueryReturning {
+            session_id: 1,
+            columns: vec!["id".into()],
+            rows: vec![vec![Some("42".into())]],
+            timestamp: now + std::time::Duration::from_micros(601),
+        })
+        .unwrap();
+
+        tx.send(CaptureEvent::SessionEnd { session_id: 1 }).unwrap();
+        drop(tx);
+
+        let captured = run_collector(rx).await;
+        assert_eq!(captured.len(), 1);
+        let (_, _, _, queries) = &captured[0];
+        assert_eq!(queries.len(), 1);
+        assert!(
+            queries[0].response_values.is_some(),
+            "response_values should be Some after QueryReturning arrives post-QueryComplete"
+        );
+        let rv = queries[0].response_values.as_ref().unwrap();
+        assert_eq!(rv.len(), 1);
+        assert_eq!(rv[0].columns, vec![("id".to_string(), "42".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn test_collector_query_returning_before_complete_loses_data() {
+        // Demonstrate the old (buggy) ordering: if QueryReturning arrives
+        // BEFORE QueryComplete, response_values is None because the query
+        // hasn't been pushed to the vec yet.
+        let (tx, rx) = mpsc::unbounded_channel();
+        let now = Instant::now();
+
+        tx.send(CaptureEvent::SessionStart {
+            session_id: 1,
+            user: "app".into(),
+            database: "mydb".into(),
+            timestamp: now,
+        })
+        .unwrap();
+
+        tx.send(CaptureEvent::QueryStart {
+            session_id: 1,
+            sql: "INSERT INTO orders (name) VALUES ('test') RETURNING id".into(),
+            timestamp: now + std::time::Duration::from_micros(100),
+        })
+        .unwrap();
+
+        // Old buggy ordering: QueryReturning arrives BEFORE QueryComplete
+        tx.send(CaptureEvent::QueryReturning {
+            session_id: 1,
+            columns: vec!["id".into()],
+            rows: vec![vec![Some("42".into())]],
+            timestamp: now + std::time::Duration::from_micros(500),
+        })
+        .unwrap();
+
+        tx.send(CaptureEvent::QueryComplete {
+            session_id: 1,
+            timestamp: now + std::time::Duration::from_micros(600),
+        })
+        .unwrap();
+
+        tx.send(CaptureEvent::SessionEnd { session_id: 1 }).unwrap();
+        drop(tx);
+
+        let captured = run_collector(rx).await;
+        assert_eq!(captured.len(), 1);
+        let (_, _, _, queries) = &captured[0];
+        assert_eq!(queries.len(), 1);
+        // With the old ordering, response_values would be None because
+        // QueryReturning tried to attach before the query was in the vec.
+        // This test documents the expected behavior with wrong ordering.
+        assert!(
+            queries[0].response_values.is_none(),
+            "response_values should be None when QueryReturning arrives before QueryComplete"
+        );
+    }
+
     #[test]
     fn test_build_profile_with_transactions() {
         let captured = vec![(
