@@ -109,6 +109,10 @@ pub struct CaptureArgs {
     #[arg(long, default_value_t = false)]
     pub mask_values: bool,
 
+    /// ID handling mode: none, sequence, correlate, full
+    #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
+    pub id_mode: crate::correlate::IdMode,
+
     /// RDS instance identifier (for --source-type rds)
     #[arg(long)]
     pub rds_instance: Option<String>,
@@ -183,6 +187,10 @@ pub struct ReplayArgs {
     /// Path to CA certificate file for TLS verification
     #[arg(long)]
     pub tls_ca_cert: Option<PathBuf>,
+
+    /// ID handling mode: none, sequence, correlate, full
+    #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
+    pub id_mode: crate::correlate::IdMode,
 }
 
 #[derive(clap::Args)]
@@ -283,6 +291,10 @@ pub struct ProxyArgs {
     /// Auto-stop capture after this duration (e.g., 30m, 2h). Unlimited if not set.
     #[arg(long)]
     pub max_capture_duration: Option<String>,
+
+    /// ID handling mode: none, sequence, correlate, full
+    #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
+    pub id_mode: crate::correlate::IdMode,
 }
 
 #[derive(clap::Args)]
