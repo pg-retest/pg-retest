@@ -81,6 +81,9 @@ pub enum Commands {
     /// Control a running persistent proxy
     #[command(name = "proxy-ctl")]
     ProxyCtl(ProxyCtlArgs),
+
+    /// Compile a workload for deterministic replay (strip response_values, validate IDs)
+    Compile(CompileArgs),
 }
 
 #[derive(clap::Args)]
@@ -557,4 +560,22 @@ pub enum ProxyCtlAction {
     Recover,
     /// Discard orphaned capture data
     Discard,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CompileArgs {
+    /// Input workload file (must have response_values from --id-mode capture)
+    pub input: String,
+
+    /// Output compiled workload file
+    #[arg(short, long)]
+    pub output: String,
+
+    /// Show stats without writing output
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Print each ID reference found
+    #[arg(long)]
+    pub verbose: bool,
 }

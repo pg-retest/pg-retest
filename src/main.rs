@@ -37,6 +37,7 @@ fn main() -> Result<()> {
         Commands::Transform(args) => cmd_transform(args),
         Commands::Tune(args) => cmd_tune(args),
         Commands::ProxyCtl(args) => cmd_proxy_ctl(args),
+        Commands::Compile(args) => cmd_compile(args),
     }
 }
 
@@ -205,8 +206,16 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
     let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
 
-    // Restore sequences on target if id-mode requires it
-    if args.id_mode.needs_sequences() {
+    // Auto-reset sequences for compiled workloads (no --id-mode needed)
+    let is_compiled = replay_profile.capture_method.contains("+compiled");
+    let needs_sequence_restore = args.id_mode.needs_sequences() || is_compiled;
+
+    if is_compiled && !args.id_mode.needs_sequences() {
+        info!("Compiled workload detected — auto-resetting sequences");
+    }
+
+    // Restore sequences on target if id-mode requires it or workload is compiled
+    if needs_sequence_restore {
         if let Some(ref snapshot) = replay_profile.metadata.sequence_snapshot {
             info!(
                 "Restoring {} sequences on target before replay...",
@@ -992,6 +1001,40 @@ fn cmd_proxy_ctl(args: pg_retest::cli::ProxyCtlArgs) -> Result<()> {
 
         Ok(())
     })
+}
+
+fn cmd_compile(args: pg_retest::cli::CompileArgs) -> Result<()> {
+    let profile = pg_retest::profile::io::read_profile(std::path::Path::new(&args.input))?;
+    let (compiled, stats) = pg_retest::correlate::compile::compile_workload(profile)?;
+
+    println!("Compilation stats:");
+    println!(
+        "  Queries with response_values: {}",
+        stats.queries_with_responses
+    );
+    println!("  Unique captured IDs: {}", stats.unique_captured_ids);
+    println!(
+        "  Queries referencing captured IDs: {}",
+        stats.queries_referencing_ids
+    );
+    println!(
+        "  Total ID references in SQL: {}",
+        stats.total_id_references
+    );
+
+    if !args.dry_run {
+        pg_retest::profile::io::write_profile(std::path::Path::new(&args.output), &compiled)?;
+        println!("\nCompiled workload written to: {}", args.output);
+        println!(
+            "Replay with: pg-retest replay --workload {} --target <connstring>",
+            args.output
+        );
+        println!("(No --id-mode needed — IDs are pre-resolved for PITR + sequence reset)");
+    } else {
+        println!("\n(dry-run: no output written)");
+    }
+
+    Ok(())
 }
 
 fn parse_duration(s: &str) -> Result<std::time::Duration> {

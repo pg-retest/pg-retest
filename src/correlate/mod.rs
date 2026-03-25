@@ -1,4 +1,5 @@
 pub mod capture;
+pub mod compile;
 pub mod map;
 pub mod sequence;
 pub mod substitute;
