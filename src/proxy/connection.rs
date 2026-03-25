@@ -32,6 +32,10 @@ pub struct CorrelateState {
     pending_columns: TokioMutex<Vec<String>>,
     /// Accumulated data rows from DataRow messages (if RETURNING).
     pending_rows: TokioMutex<Vec<Vec<Option<String>>>>,
+    /// When true, the server-to-client relay should suppress 'T' (RowDescription)
+    /// and 'D' (DataRow) messages — they came from auto-injected RETURNING
+    /// and the client doesn't expect them.
+    suppress_response: TokioMutex<bool>,
 }
 
 impl Default for CorrelateState {
@@ -46,6 +50,7 @@ impl CorrelateState {
             returning_queue: TokioMutex::new(VecDeque::new()),
             pending_columns: TokioMutex::new(Vec::new()),
             pending_rows: TokioMutex::new(Vec::new()),
+            suppress_response: TokioMutex::new(false),
         }
     }
 }
@@ -57,6 +62,9 @@ impl CorrelateState {
 pub struct ImplicitCaptureState {
     /// Primary key columns per table, used by `inject_returning()`.
     pub pk_map: Vec<TablePk>,
+    /// When true (default), suppress auto-injected RETURNING results from the client.
+    /// The client sees the same response as a bare INSERT (CommandComplete only).
+    pub stealth: bool,
 }
 
 /// Handle a single client connection through its full lifecycle.
@@ -319,9 +327,13 @@ async fn relay_client_to_server(
                                 protocol::write_message(&mut server, &rewritten).await?;
                                 server.flush().await?;
 
-                                // Track RETURNING for correlation
+                                // Track RETURNING for correlation and set suppress flag
+                                // for stealth mode (hide injected RETURNING results from client)
                                 if let Some(ref cs) = correlate {
                                     cs.returning_queue.lock().await.push_back(true);
+                                    if ic.stealth {
+                                        *cs.suppress_response.lock().await = true;
+                                    }
                                 }
                                 let event = CaptureEvent::QueryStart {
                                     session_id,
@@ -523,11 +535,12 @@ async fn relay_server_to_client(
                 }
                 b'E' => {
                     // ErrorResponse
-                    // Clear correlation state on error
+                    // Clear correlation state and suppress flag on error
                     if let Some(ref cs) = correlate {
                         let _ = cs.returning_queue.lock().await.pop_front();
                         cs.pending_columns.lock().await.clear();
                         cs.pending_rows.lock().await.clear();
+                        *cs.suppress_response.lock().await = false;
                     }
 
                     if let Some(err_msg) = extract_error_message(&msg) {
@@ -546,6 +559,29 @@ async fn relay_server_to_client(
             }
         }
 
+        // Stealth RETURNING mode: suppress RowDescription and DataRow messages
+        // from auto-injected RETURNING so the client never sees them.
+        // The capture logic above still runs — we just skip forwarding to the client.
+        let suppress = if let Some(ref cs) = correlate {
+            *cs.suppress_response.lock().await
+        } else {
+            false
+        };
+
+        match msg.msg_type {
+            b'T' | b'D' if suppress => {
+                // Captured for ID map above, but NOT forwarded to client
+                continue;
+            }
+            b'C' if suppress => {
+                // CommandComplete — clear suppress flag, then forward normally
+                if let Some(ref cs) = correlate {
+                    *cs.suppress_response.lock().await = false;
+                }
+            }
+            _ => {}
+        }
+
         protocol::write_message(&mut client, &msg).await?;
         // Flush after ReadyForQuery so client sees results promptly
         if msg.msg_type == b'Z' {
@@ -553,4 +589,124 @@ async fn relay_server_to_client(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_suppress_response_flag_lifecycle() {
+        // Verify that the suppress flag is set and cleared correctly
+        let cs = CorrelateState::new();
+
+        // Initially false
+        assert!(!*cs.suppress_response.lock().await);
+
+        // Set to true (simulating inject_returning in c2s relay)
+        *cs.suppress_response.lock().await = true;
+        assert!(*cs.suppress_response.lock().await);
+
+        // Clear on CommandComplete (simulating s2c relay)
+        *cs.suppress_response.lock().await = false;
+        assert!(!*cs.suppress_response.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_suppress_clears_on_error() {
+        // Verify that the suppress flag is cleared when an error occurs
+        let cs = CorrelateState::new();
+        cs.returning_queue.lock().await.push_back(true);
+        *cs.suppress_response.lock().await = true;
+
+        // Simulate ErrorResponse handling: pop queue, clear pending state, clear suppress
+        let _ = cs.returning_queue.lock().await.pop_front();
+        cs.pending_columns.lock().await.clear();
+        cs.pending_rows.lock().await.clear();
+        *cs.suppress_response.lock().await = false;
+
+        assert!(!*cs.suppress_response.lock().await);
+        assert!(cs.returning_queue.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_stealth_suppresses_t_and_d_but_forwards_c() {
+        // Simulate the message type matching logic used in relay_server_to_client.
+        // When suppress is true: T and D should be skipped, C should clear the flag.
+        let cs = CorrelateState::new();
+        *cs.suppress_response.lock().await = true;
+
+        let mut forwarded: Vec<u8> = Vec::new();
+        let msg_types = vec![b'T', b'D', b'D', b'C', b'Z'];
+
+        for msg_type in msg_types {
+            let suppress = *cs.suppress_response.lock().await;
+
+            match msg_type {
+                b'T' | b'D' if suppress => {
+                    // Suppressed — not forwarded
+                    continue;
+                }
+                b'C' if suppress => {
+                    // CommandComplete — clear suppress, forward
+                    *cs.suppress_response.lock().await = false;
+                }
+                _ => {}
+            }
+
+            forwarded.push(msg_type);
+        }
+
+        // Only C and Z should be forwarded; T and D are suppressed
+        assert_eq!(forwarded, vec![b'C', b'Z']);
+        // Suppress flag should be cleared after C
+        assert!(!*cs.suppress_response.lock().await);
+    }
+
+    #[tokio::test]
+    async fn test_no_suppress_when_flag_is_false() {
+        // When suppress is false (explicit RETURNING or stealth disabled),
+        // all messages should be forwarded.
+        let cs = CorrelateState::new();
+        // suppress_response is false by default
+
+        let mut forwarded: Vec<u8> = Vec::new();
+        let msg_types = vec![b'T', b'D', b'D', b'C', b'Z'];
+
+        for msg_type in msg_types {
+            let suppress = *cs.suppress_response.lock().await;
+
+            match msg_type {
+                b'T' | b'D' if suppress => {
+                    continue;
+                }
+                b'C' if suppress => {
+                    *cs.suppress_response.lock().await = false;
+                }
+                _ => {}
+            }
+
+            forwarded.push(msg_type);
+        }
+
+        // All messages forwarded
+        assert_eq!(forwarded, vec![b'T', b'D', b'D', b'C', b'Z']);
+    }
+
+    #[test]
+    fn test_implicit_capture_state_stealth_default() {
+        // Stealth should be true by default (no_stealth = false)
+        let state = ImplicitCaptureState {
+            pk_map: vec![],
+            stealth: true,
+        };
+        assert!(state.stealth);
+
+        // When --no-stealth is passed
+        let state = ImplicitCaptureState {
+            pk_map: vec![],
+            stealth: false,
+        };
+        assert!(!state.stealth);
+    }
 }

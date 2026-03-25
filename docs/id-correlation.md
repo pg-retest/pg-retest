@@ -122,6 +122,7 @@ When this flag is enabled:
 
 - **Auto-inject RETURNING:** If an INSERT lacks a RETURNING clause and the proxy knows the table's primary key columns (discovered from the source database at startup), the proxy appends `RETURNING <pk_columns>` to the query sent to the server and stored in the profile. The generated ID is captured as a response value.
 - **currval/lastval interception:** Responses to `SELECT currval('seq_name')` and `SELECT lastval()` are captured as implicit RETURNING values and fed into the ID map.
+- **Stealth mode (default):** When auto-injecting RETURNING, the proxy suppresses the extra RowDescription and DataRow messages before forwarding to the client. The client never sees the RETURNING results — it receives the same response as a bare INSERT (just CommandComplete + ReadyForQuery). This prevents driver compatibility issues with JDBC, asyncpg, Entity Framework, and other clients that don't expect result rows from a plain INSERT. Use `--no-stealth` to forward auto-injected RETURNING results to the client.
 
 The `--source-db` flag is required when using `--id-capture-implicit` so that primary key metadata can be queried at startup.
 
@@ -268,9 +269,11 @@ Latency comparisons in read-only mode are valid for the query execution engine b
 
 ### Implicit Capture Risks (`--id-capture-implicit`)
 
-**`--id-capture-implicit` modifies queries sent to the database.** When enabled, the proxy appends `RETURNING <pk_columns>` to bare INSERT statements. This changes what the PostgreSQL server sends back to the client -- the client application receives DataRow messages it was not expecting. While most PostgreSQL client libraries handle this gracefully (they read all messages until `ReadyForQuery` and discard unexpected rows), some drivers and ORMs may not.
+**`--id-capture-implicit` modifies queries sent to the database.** When enabled, the proxy appends `RETURNING <pk_columns>` to bare INSERT statements. The PostgreSQL server sends back extra RowDescription and DataRow messages that the client application did not request.
 
-**This flag is off by default for exactly this reason.** Only enable it when you understand the risk.
+**Stealth mode (enabled by default) mitigates this risk.** The proxy captures the RETURNING data for the ID map but strips the RowDescription and DataRow messages before forwarding to the client. The client sees only CommandComplete + ReadyForQuery — exactly the same response as a bare INSERT without RETURNING. This makes `--id-capture-implicit` safe for all drivers and ORMs listed below.
+
+**If stealth mode is disabled** (`--no-stealth`), the raw RETURNING results are forwarded to the client, which may cause compatibility issues with some drivers. The risk table below applies only when `--no-stealth` is used.
 
 #### Driver/ORM Compatibility
 

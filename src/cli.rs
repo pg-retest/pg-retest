@@ -318,6 +318,12 @@ pub struct ProxyArgs {
     #[arg(long, default_value_t = false)]
     pub id_capture_implicit: bool,
 
+    /// Disable stealth mode: forward auto-injected RETURNING results to client
+    /// (by default, injected RETURNING results are suppressed — the client sees
+    /// the same response as a bare INSERT)
+    #[arg(long, default_value_t = false)]
+    pub no_stealth: bool,
+
     /// Register all differing RETURNING column values (not just integers/UUIDs)
     #[arg(long, default_value_t = false)]
     pub id_correlate_all_columns: bool,

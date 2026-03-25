@@ -56,13 +56,19 @@ pub struct ProxyConfig {
     pub id_capture_implicit: bool,
     /// Primary key map for implicit RETURNING injection (discovered at startup).
     pub pk_map: Option<Vec<crate::correlate::capture::TablePk>>,
+    /// Disable stealth mode: forward auto-injected RETURNING results to client.
+    /// When false (default), injected RETURNING results are suppressed.
+    pub no_stealth: bool,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
 fn build_implicit_capture_state(config: &ProxyConfig) -> Option<Arc<ImplicitCaptureState>> {
     if config.id_capture_implicit {
         let pk_map = config.pk_map.clone().unwrap_or_default();
-        Some(Arc::new(ImplicitCaptureState { pk_map }))
+        Some(Arc::new(ImplicitCaptureState {
+            pk_map,
+            stealth: !config.no_stealth,
+        }))
     } else {
         None
     }

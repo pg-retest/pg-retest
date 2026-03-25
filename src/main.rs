@@ -548,6 +548,7 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         enable_correlation,
         id_capture_implicit: args.id_capture_implicit && pk_map.is_some(),
         pk_map,
+        no_stealth: args.no_stealth,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

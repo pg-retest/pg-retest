@@ -101,6 +101,7 @@ pub async fn start_proxy(
         enable_correlation: false,
         id_capture_implicit: false,
         pk_map: None,
+        no_stealth: false,
     };
 
     let listen = req.listen.clone();
