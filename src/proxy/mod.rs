@@ -73,7 +73,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     let pool_clone = pool.clone();
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let listener_handle = tokio::spawn(async move {
-        listener::run_listener(listener, pool_clone, capture_tx, no_capture, None).await
+        listener::run_listener(listener, pool_clone, capture_tx, no_capture, None, false).await
     });
 
     // Wait for shutdown signal or duration
@@ -202,6 +202,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             persistent_capture_tx,
             no_capture_clone,
             None,
+            false,
         )
         .await
     });
@@ -542,6 +543,7 @@ pub async fn run_proxy_managed(
             capture_tx,
             no_capture,
             Some(metrics_tx),
+            false,
         )
         .await
     });
@@ -637,6 +639,7 @@ async fn run_proxy_managed_multi(
             persistent_capture_tx,
             no_capture_clone,
             Some(metrics_tx),
+            false,
         )
         .await
     });

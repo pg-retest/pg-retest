@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::capture::masking::mask_sql_literals;
+use crate::correlate::capture::ResponseRow;
 use crate::profile::{self, Metadata, Query, QueryKind, Session, WorkloadProfile};
 
 use super::staging::{StagingDb, StagingRow};
@@ -33,6 +34,12 @@ pub enum CaptureEvent {
         message: String,
         timestamp: Instant,
     },
+    QueryReturning {
+        session_id: u64,
+        columns: Vec<String>,
+        rows: Vec<Vec<Option<String>>>,
+        timestamp: Instant,
+    },
     SessionEnd {
         session_id: u64,
     },
@@ -53,6 +60,7 @@ pub(crate) struct CapturedQuery {
     duration_us: u64,
     is_error: bool,
     error_message: Option<String>,
+    response_values: Option<Vec<ResponseRow>>,
 }
 
 /// Runs the capture collector loop, consuming events until the channel closes.
@@ -113,6 +121,7 @@ pub(crate) async fn run_collector(
                             duration_us: duration.as_micros() as u64,
                             is_error: false,
                             error_message: None,
+                            response_values: None,
                         });
                     }
                 }
@@ -133,7 +142,34 @@ pub(crate) async fn run_collector(
                             duration_us: duration.as_micros() as u64,
                             is_error: true,
                             error_message: Some(message.clone()),
+                            response_values: None,
                         });
+                    }
+                }
+            }
+            CaptureEvent::QueryReturning {
+                session_id,
+                columns,
+                rows,
+                ..
+            } => {
+                if let Some(state) = sessions.get_mut(&session_id) {
+                    // Attach to the most recent query for this session
+                    if let Some(last_query) = state.queries.last_mut() {
+                        let response_rows: Vec<ResponseRow> = rows
+                            .into_iter()
+                            .map(|row| {
+                                let cols: Vec<(String, String)> = columns
+                                    .iter()
+                                    .zip(row.into_iter())
+                                    .map(|(name, val)| {
+                                        (name.clone(), val.unwrap_or_else(|| "NULL".to_string()))
+                                    })
+                                    .collect();
+                                ResponseRow { columns: cols }
+                            })
+                            .collect();
+                        last_query.response_values = Some(response_rows);
                     }
                 }
             }
@@ -179,7 +215,7 @@ pub(crate) fn build_profile(
                     start_offset_us: cq.start_offset_us,
                     duration_us: cq.duration_us,
                     transaction_id: None,
-                    response_values: None,
+                    response_values: cq.response_values,
                 }
             })
             .collect();
@@ -317,6 +353,7 @@ pub(crate) async fn run_staging_collector(
                                 is_error: false,
                                 error_message: None,
                                 timestamp_us: offset.as_micros() as i64,
+                                response_values_json: None,
                             });
                         }
                     }
@@ -347,7 +384,39 @@ pub(crate) async fn run_staging_collector(
                                 is_error: true,
                                 error_message: Some(message),
                                 timestamp_us: offset.as_micros() as i64,
+                                response_values_json: None,
                             });
+                        }
+                    }
+                }
+                CaptureEvent::QueryReturning {
+                    session_id,
+                    columns,
+                    rows,
+                    ..
+                } => {
+                    // Attach to the most recent staged row for this session.
+                    // Since staging rows are batched, we look in the current batch first.
+                    if let Some(last_row) = batch
+                        .iter_mut()
+                        .rev()
+                        .find(|r| r.session_id == session_id as i64)
+                    {
+                        let response_rows: Vec<ResponseRow> = rows
+                            .into_iter()
+                            .map(|row| {
+                                let cols: Vec<(String, String)> = columns
+                                    .iter()
+                                    .zip(row.into_iter())
+                                    .map(|(name, val)| {
+                                        (name.clone(), val.unwrap_or_else(|| "NULL".to_string()))
+                                    })
+                                    .collect();
+                                ResponseRow { columns: cols }
+                            })
+                            .collect();
+                        if let Ok(json) = serde_json::to_string(&response_rows) {
+                            last_row.response_values_json = Some(json);
                         }
                     }
                 }
@@ -401,13 +470,17 @@ pub(crate) fn build_profile_from_staging(
                 } else {
                     sr.sql
                 };
+                let response_values = sr
+                    .response_values_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<Vec<ResponseRow>>(json).ok());
                 Query {
                     kind: QueryKind::from_sql(&sql),
                     sql,
                     start_offset_us: sr.start_offset_us as u64,
                     duration_us: sr.duration_us as u64,
                     transaction_id: None,
-                    response_values: None,
+                    response_values,
                 }
             })
             .collect();
@@ -508,6 +581,7 @@ mod tests {
                     duration_us: 10,
                     is_error: false,
                     error_message: None,
+                    response_values: None,
                 },
                 CapturedQuery {
                     sql: "INSERT INTO t VALUES (1)".into(),
@@ -515,6 +589,7 @@ mod tests {
                     duration_us: 500,
                     is_error: false,
                     error_message: None,
+                    response_values: None,
                 },
                 CapturedQuery {
                     sql: "COMMIT".into(),
@@ -522,6 +597,7 @@ mod tests {
                     duration_us: 20,
                     is_error: false,
                     error_message: None,
+                    response_values: None,
                 },
             ],
         )];
@@ -548,6 +624,7 @@ mod tests {
                 duration_us: 100,
                 is_error: false,
                 error_message: None,
+                response_values: None,
             }],
         )];
 
@@ -577,7 +654,8 @@ mod tests {
                 duration_us INTEGER NOT NULL,
                 is_error INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
-                timestamp_us INTEGER NOT NULL
+                timestamp_us INTEGER NOT NULL,
+                response_values_json TEXT
             );",
         )
         .unwrap();
@@ -643,7 +721,8 @@ mod tests {
                 duration_us INTEGER NOT NULL,
                 is_error INTEGER NOT NULL DEFAULT 0,
                 error_message TEXT,
-                timestamp_us INTEGER NOT NULL
+                timestamp_us INTEGER NOT NULL,
+                response_values_json TEXT
             );",
         )
         .unwrap();
@@ -702,6 +781,7 @@ mod tests {
                 is_error: false,
                 error_message: None,
                 timestamp_us: 0,
+                response_values_json: None,
             },
             StagingRow {
                 capture_id: "cap-1".to_string(),
@@ -715,6 +795,7 @@ mod tests {
                 is_error: false,
                 error_message: None,
                 timestamp_us: 200,
+                response_values_json: None,
             },
         ];
 
@@ -743,6 +824,7 @@ mod tests {
                 is_error: false,
                 error_message: None,
                 timestamp_us: 0,
+                response_values_json: None,
             },
             StagingRow {
                 capture_id: "cap-1".to_string(),
@@ -756,6 +838,7 @@ mod tests {
                 is_error: false,
                 error_message: None,
                 timestamp_us: 100,
+                response_values_json: None,
             },
             StagingRow {
                 capture_id: "cap-1".to_string(),
@@ -769,6 +852,7 @@ mod tests {
                 is_error: false,
                 error_message: None,
                 timestamp_us: 700,
+                response_values_json: None,
             },
         ];
 
@@ -793,6 +877,7 @@ mod tests {
             is_error: false,
             error_message: None,
             timestamp_us: 0,
+            response_values_json: None,
         }];
 
         let profile = build_profile_from_staging(rows, "test", true);
