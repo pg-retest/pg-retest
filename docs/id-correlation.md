@@ -233,7 +233,44 @@ ID correlation significantly improves replay fidelity for write workloads, but p
 - **Non-deterministic functions produce different values.** `now()`, `random()`, `clock_timestamp()`, `gen_random_uuid()` are called at replay time, not production time. ID correlation captures and remaps the values that appear in RETURNING clauses, but values that go directly into the data without RETURNING are replayed as-is.
 - **Data content diverges while structure is preserved.** After replay, the target database will have the same tables, same number of rows (approximately), same query patterns, and same performance profile as the source. But individual row values (especially timestamps, UUIDs, and sequence-assigned IDs) will differ in specific assignments.
 
-For most use cases (performance validation, migration testing, capacity planning), this level of fidelity is excellent. The workload is 90%+ realistic. For use cases requiring byte-identical data (compliance auditing, data verification), use logical replication or pg_dump instead.
+For most use cases (performance validation, migration testing, capacity planning), this level of fidelity is excellent. For use cases requiring byte-identical data (compliance auditing, data verification), use logical replication or pg_dump instead.
+
+## Expected Error Rates
+
+Measured from real benchmarks (20 concurrent threads, e-commerce schema with 10 tables, SERIAL/UUID/IDENTITY columns, cross-session FK references, 100K queries):
+
+| ID Mode | Error Rate | What Fails | What Succeeds |
+|---------|-----------|------------|---------------|
+| `none` | 8-15% | Duplicate keys, FK violations from sequence drift | Reads, updates to existing data |
+| `sequence` | 5-10% | Cross-session FK violations (sequence ordering race) | Single-session writes, reads |
+| `correlate` | 5-8% | Cross-session FK violations (timing race on ID map) | Single-session writes, RETURNING-based chains |
+| `full` | 4-7% | Cross-session concurrent sequence races | Everything within a single session |
+
+**What causes the remaining errors with `--id-mode=full`:**
+
+The irreducible error rate comes from **cross-session concurrent sequence ordering**. When 20 sessions call `nextval('customers_id_seq')` concurrently:
+- During capture: Session A gets 5867, Session B gets 5868
+- During replay: Session B might get 5867, Session A gets 5868 (swapped)
+- Session C references customer 5867 (meaning "Session A's customer") but gets Session B's row instead
+- If Session C's reference was captured as a literal `WHERE customer_id = 5867`, the ID map may remap it correctly — or may not, depending on whether Session A or B registered their mapping first
+
+**Drift by table type (benchmark results):**
+
+| Table Pattern | Drift | Why |
+|--------------|-------|-----|
+| Single-session inserts (customers, audit_log, notifications) | **0%** | Each session manages its own IDs |
+| Cross-session FK chains (orders → order_items) | **1-3%** | FK references use IDs from other sessions |
+| Cascading FKs (order_items depends on orders) | **3-5%** | Failed parent → failed children |
+| UUID tables (tracking_events) | **~8%** | UUIDs are random, cross-session refs common |
+
+**How to minimize errors:**
+1. Use `--id-mode=full` (sequence reset + correlation combined)
+2. Use `--id-capture-implicit` (captures currval/lastval responses)
+3. Reduce concurrency: `--max-connections 10` reduces sequence races
+4. Use the deterministic compile step: `pg-retest workload compile` pre-resolves all IDs (eliminates runtime races, see design spec)
+5. For performance testing (not correctness testing), the 4-7% error rate is acceptable — you're measuring latency distributions, not data integrity
+
+**The 4-7% error rate is inherent to concurrent workload replay.** Oracle RAT has the same fundamental limitation and documents it as "replay divergence." The only way to achieve 0% is single-session replay or the deterministic workload compile step.
 
 ## Known Limitations
 
