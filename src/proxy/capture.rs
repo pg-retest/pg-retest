@@ -58,7 +58,9 @@ pub(crate) struct CapturedQuery {
     sql: String,
     start_offset_us: u64,
     duration_us: u64,
+    #[allow(dead_code)]
     is_error: bool,
+    #[allow(dead_code)]
     error_message: Option<String>,
     response_values: Option<Vec<ResponseRow>>,
 }

@@ -34,6 +34,12 @@ pub struct CorrelateState {
     pending_rows: TokioMutex<Vec<Vec<Option<String>>>>,
 }
 
+impl Default for CorrelateState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CorrelateState {
     pub fn new() -> Self {
         Self {
@@ -54,6 +60,7 @@ pub struct ImplicitCaptureState {
 }
 
 /// Handle a single client connection through its full lifecycle.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_connection(
     client_stream: TcpStream,
     pool: Arc<SessionPool>,
@@ -80,6 +87,7 @@ pub async fn handle_connection(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection_inner(
     mut client_stream: TcpStream,
     pool: Arc<SessionPool>,
@@ -277,6 +285,7 @@ async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bo
 }
 
 /// Relay messages from client to server, extracting capture data.
+#[allow(clippy::too_many_arguments)]
 async fn relay_client_to_server(
     mut client: BufReader<ReadHalf<TcpStream>>,
     mut server: BufWriter<WriteHalf<TcpStream>>,

@@ -7,10 +7,11 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 /// ID handling mode for capture and replay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IdMode {
     /// No ID handling (default, current behavior)
+    #[default]
     None,
     /// Snapshot sequences at capture, reset on target before replay
     Sequence,
@@ -18,12 +19,6 @@ pub enum IdMode {
     Correlate,
     /// Sequence reset + correlation combined
     Full,
-}
-
-impl Default for IdMode {
-    fn default() -> Self {
-        IdMode::None
-    }
 }
 
 impl IdMode {
