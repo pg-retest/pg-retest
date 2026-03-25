@@ -69,6 +69,7 @@ fn make_replay_results() -> Vec<ReplayResults> {
                 replay_duration_us: 80,
                 success: true,
                 error: None,
+                id_substitution_count: 0,
             },
             QueryResult {
                 sql: "SELECT 2".into(),
@@ -76,6 +77,7 @@ fn make_replay_results() -> Vec<ReplayResults> {
                 replay_duration_us: 250,
                 success: true,
                 error: None,
+                id_substitution_count: 0,
             },
             QueryResult {
                 sql: "UPDATE t SET x=1".into(),
@@ -83,6 +85,7 @@ fn make_replay_results() -> Vec<ReplayResults> {
                 replay_duration_us: 280,
                 success: true,
                 error: None,
+                id_substitution_count: 0,
             },
             QueryResult {
                 sql: "SELECT 3".into(),
@@ -90,6 +93,7 @@ fn make_replay_results() -> Vec<ReplayResults> {
                 replay_duration_us: 4500,
                 success: false,
                 error: Some("timeout".into()),
+                id_substitution_count: 0,
             },
         ],
     }]
@@ -218,6 +222,7 @@ fn test_evaluate_outcome_pass_no_regressions_no_errors() {
             replay_duration_us: 90,
             success: true,
             error: None,
+            id_substitution_count: 0,
         }],
     }];
 

@@ -279,6 +279,7 @@ fn run_replay_step(
             config.replay.speed,
             None,
             None,
+            crate::correlate::IdMode::None,
         ))
         .map_err(|e| anyhow::anyhow!("Replay error: {e}"))?;
 
@@ -341,6 +342,7 @@ fn run_ab_pipeline(
                 config.replay.speed,
                 None,
                 None,
+                crate::correlate::IdMode::None,
             ))
             .map_err(|e| anyhow::anyhow!("Replay error for '{}': {e}", variant.label))?;
         variant_results.push(VariantResult::from_results(variant.label.clone(), results));

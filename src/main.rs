@@ -252,6 +252,14 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
         }
     }
 
+    if args.id_mode.needs_correlation() && replay_profile.capture_method != "proxy" {
+        anyhow::bail!(
+            "--id-mode=correlate requires proxy-captured workload (found: {}). \
+             Re-capture using `pg-retest proxy` or use --id-mode=sequence instead.",
+            replay_profile.capture_method
+        );
+    }
+
     let rt = tokio::runtime::Runtime::new()?;
     let replay_start = std::time::Instant::now();
     let results = rt.block_on(run_replay(
@@ -261,6 +269,7 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
         args.speed,
         args.max_connections,
         tls,
+        args.id_mode,
     ))?;
     let elapsed_us = replay_start.elapsed().as_micros() as u64;
 
@@ -550,6 +559,7 @@ fn cmd_ab(args: pg_retest::cli::ABArgs) -> Result<()> {
             args.speed,
             None,
             None,
+            pg_retest::correlate::IdMode::None,
         ))?;
         variant_results.push(VariantResult::from_results(label.clone(), results));
     }

@@ -245,6 +245,7 @@ mod tests {
                     replay_duration_us: 90,
                     success: true,
                     error: None,
+                    id_substitution_count: 0,
                 },
                 QueryResult {
                     sql: "SELECT 2".into(),
@@ -252,6 +253,7 @@ mod tests {
                     replay_duration_us: 180,
                     success: true,
                     error: None,
+                    id_substitution_count: 0,
                 },
                 QueryResult {
                     sql: "SELECT 3".into(),
@@ -259,6 +261,7 @@ mod tests {
                     replay_duration_us: 310,
                     success: true,
                     error: None,
+                    id_substitution_count: 0,
                 },
             ],
         }];

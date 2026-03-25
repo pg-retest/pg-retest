@@ -283,6 +283,7 @@ async fn run_step_replay(
         1.0,
         None,
         None,
+        crate::correlate::IdMode::None,
     )
     .await
     .map_err(|e| {
@@ -393,6 +394,7 @@ async fn run_step_scale(
         1.0,
         None,
         None,
+        crate::correlate::IdMode::None,
     )
     .await
     .map_err(|e| {
@@ -464,6 +466,7 @@ async fn run_scenario_migration(
         1.0,
         None,
         None,
+        crate::correlate::IdMode::None,
     )
     .await
     .map_err(|e| {
@@ -505,6 +508,7 @@ async fn run_scenario_ab(
         1.0,
         None,
         None,
+        crate::correlate::IdMode::None,
     )
     .await
     .map_err(|e| {
@@ -520,6 +524,7 @@ async fn run_scenario_ab(
         1.0,
         None,
         None,
+        crate::correlate::IdMode::None,
     )
     .await
     .map_err(|e| {

@@ -80,6 +80,7 @@ fn test_replay_results_structure() {
                 replay_duration_us: 80,
                 success: true,
                 error: None,
+                id_substitution_count: 0,
             },
             QueryResult {
                 sql: "SELECT 2".into(),
@@ -87,6 +88,7 @@ fn test_replay_results_structure() {
                 replay_duration_us: 250,
                 success: true,
                 error: None,
+                id_substitution_count: 0,
             },
         ],
     };
