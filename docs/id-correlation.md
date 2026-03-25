@@ -224,6 +224,16 @@ When substitution is attempted but an expected ID is not found in the map, the c
 
 This lets users distinguish real performance regressions from residual ID correlation issues.
 
+## Replay Is Simulation, Not Replication
+
+ID correlation significantly improves replay fidelity for write workloads, but pg-retest replay is fundamentally a **simulation**, not a replication system. Even with `--id-mode=full`:
+
+- **Concurrent session ordering is approximate.** Replay preserves timing offsets but OS scheduling, network jitter, and connection pool behavior mean the exact interleaving of concurrent sessions will differ. Two sessions racing for the same sequence value may get different assignments than in production.
+- **Non-deterministic functions produce different values.** `now()`, `random()`, `clock_timestamp()`, `gen_random_uuid()` are called at replay time, not production time. ID correlation captures and remaps the values that appear in RETURNING clauses, but values that go directly into the data without RETURNING are replayed as-is.
+- **Data content diverges while structure is preserved.** After replay, the target database will have the same tables, same number of rows (approximately), same query patterns, and same performance profile as the source. But individual row values (especially timestamps, UUIDs, and sequence-assigned IDs) will differ in specific assignments.
+
+For most use cases (performance validation, migration testing, capacity planning), this level of fidelity is excellent. The workload is 90%+ realistic. For use cases requiring byte-identical data (compliance auditing, data verification), use logical replication or pg_dump instead.
+
 ## Known Limitations
 
 ### Read-Only Replay and Data State Divergence
