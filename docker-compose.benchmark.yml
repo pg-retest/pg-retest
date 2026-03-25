@@ -54,6 +54,35 @@ services:
       timeout: 3s
       retries: 10
 
+  # PITR restore target — starts from pg_basebackup + WAL replay
+  # Usage:
+  #   1. Take base backup:  docker compose -f docker-compose.benchmark.yml exec db-a \
+  #        bash -c 'pg_basebackup -D /backups/base -U demo -Fp -Xs -P -R --checkpoint=fast'
+  #   2. Run workload through proxy (restore point auto-created)
+  #   3. Force WAL archive:  docker compose -f docker-compose.benchmark.yml exec db-a \
+  #        psql -U demo -d ecommerce -c "SELECT pg_switch_wal();"
+  #   4. Start PITR restore: RESTORE_POINT=pg_retest_capture_YYYYMMDD_HHMMSS \
+  #        docker compose -f docker-compose.benchmark.yml up db-b-pitr
+  db-b-pitr:
+    image: postgres:16
+    user: postgres
+    volumes:
+      - base-backup-a:/backups:ro
+      - wal-archive-a:/var/lib/postgresql/wal_archive:ro
+      - ./demo/pitr-restore.sh:/pitr-restore.sh:ro
+      - pitr-data:/var/lib/postgresql/data
+    ports:
+      - "5452:5432"
+    environment:
+      RESTORE_POINT: "${RESTORE_POINT:-}"
+    entrypoint: ["/bin/bash", "/pitr-restore.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   # Build pg-retest image with benchmark tools
   pg-retest:
     build: .
@@ -142,3 +171,4 @@ volumes:
   benchmark-data:
   wal-archive-a:
   base-backup-a:
+  pitr-data:
