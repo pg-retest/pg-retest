@@ -445,33 +445,45 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
     // If implicit capture is enabled, discover primary keys from the target
     let enable_correlation = args.id_mode.needs_correlation() || args.id_capture_implicit;
     let pk_map = if args.id_capture_implicit {
-        let rt_tmp = tokio::runtime::Runtime::new()?;
-        match rt_tmp.block_on(async {
-            use pg_retest::correlate::capture::discover_primary_keys;
-            use tokio_postgres::NoTls;
-            let (client, connection) = tokio_postgres::connect(&args.target, NoTls).await?;
-            tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    tracing::error!("PK discovery connection error: {}", e);
-                }
-            });
-            discover_primary_keys(&client).await
-        }) {
-            Ok(pks) => {
-                info!(
-                    "Discovered primary keys for {} tables from target",
-                    pks.len()
-                );
-                Some(pks)
+        // PK discovery needs a libpq connection string, use --source-db (same as sequence snapshot)
+        let source_conn = match &args.source_db {
+            Some(s) => s.clone(),
+            None => {
+                warn!("--id-capture-implicit requires --source-db for PK discovery. Implicit RETURNING disabled.");
+                String::new()
             }
-            Err(e) => {
-                warn!(
+        };
+        if source_conn.is_empty() {
+            None
+        } else {
+            let rt_tmp = tokio::runtime::Runtime::new()?;
+            match rt_tmp.block_on(async {
+                use pg_retest::correlate::capture::discover_primary_keys;
+                use tokio_postgres::NoTls;
+                let (client, connection) = tokio_postgres::connect(&source_conn, NoTls).await?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        tracing::error!("PK discovery connection error: {}", e);
+                    }
+                });
+                discover_primary_keys(&client).await
+            }) {
+                Ok(pks) => {
+                    info!(
+                        "Discovered primary keys for {} tables from target",
+                        pks.len()
+                    );
+                    Some(pks)
+                }
+                Err(e) => {
+                    warn!(
                     "Failed to discover primary keys: {:#}. Implicit RETURNING injection disabled.",
                     e
                 );
-                None
+                    None
+                }
             }
-        }
+        } // end if !source_conn.is_empty()
     } else {
         None
     };
