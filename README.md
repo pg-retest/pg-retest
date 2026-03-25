@@ -242,6 +242,7 @@ sequenceDiagram
 | **AI workload transform** | Reshape workloads with AI (scale, inject, remove queries) |
 | **AI-assisted tuning** | LLM-powered config, index, query, and schema recommendations |
 | **Capacity planning** | Throughput QPS, latency percentiles, error rates at scale |
+| **ID correlation** | Sequence snapshot/reset, RETURNING value capture, cross-session ID remapping |
 | **Persistent proxy** | Always-on proxy with start/stop capture, SQLite staging, crash recovery |
 | **Capture safeguards** | Auto-stop on query count, DB size, or duration limits |
 | **Docker demo** | One-command demo with e-commerce data, guided wizard, and scenario cards |
@@ -474,6 +475,19 @@ pg-retest replay --workload workload.wkl --target "host=localhost dbname=mydb us
 | Scaled | `--scale N` | Duplicates sessions Nx with `--stagger-ms` offset. |
 | Per-category | `--scale-analytical 2` | Scale workload categories independently. |
 | Speed-adjusted | `--speed 2.0` | Compress (>1) or stretch (<1) inter-query timing. |
+
+### ID Correlation
+
+Database-generated IDs (sequences, UUIDs, identity columns) diverge when replaying against a target database. pg-retest solves this with four `--id-mode` options:
+
+| Mode | Description |
+|------|-------------|
+| `none` | No ID handling (default). Works for read-only replay or PITR-restored targets. |
+| `sequence` | Snapshot sequences at capture time, reset on target before replay. Handles serial/bigserial/identity columns. |
+| `correlate` | Capture RETURNING values through the proxy, substitute during replay. Handles sequences, UUIDs, and any RETURNING value. Requires proxy capture. |
+| `full` | Sequence reset + correlation combined. Maximum fidelity for write-heavy workloads. |
+
+See [docs/id-correlation.md](docs/id-correlation.md) for detailed usage, driver compatibility, and known limitations.
 
 ### Transaction-Aware Replay
 
