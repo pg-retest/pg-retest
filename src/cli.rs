@@ -109,7 +109,9 @@ pub struct CaptureArgs {
     #[arg(long, default_value_t = false)]
     pub mask_values: bool,
 
-    /// ID handling mode: none, sequence, correlate, full
+    /// ID handling mode for sequence-generated keys: none (default, no handling),
+    /// sequence (snapshot/restore sequences), correlate (RETURNING capture, Phase 2),
+    /// full (sequence + correlate, Phase 2)
     #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
     pub id_mode: crate::correlate::IdMode,
 
@@ -188,7 +190,9 @@ pub struct ReplayArgs {
     #[arg(long)]
     pub tls_ca_cert: Option<PathBuf>,
 
-    /// ID handling mode: none, sequence, correlate, full
+    /// ID handling mode for sequence-generated keys: none (default, no handling),
+    /// sequence (snapshot/restore sequences), correlate (RETURNING capture, Phase 2),
+    /// full (sequence + correlate, Phase 2)
     #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
     pub id_mode: crate::correlate::IdMode,
 }
@@ -292,7 +296,9 @@ pub struct ProxyArgs {
     #[arg(long)]
     pub max_capture_duration: Option<String>,
 
-    /// ID handling mode: none, sequence, correlate, full
+    /// ID handling mode for sequence-generated keys: none (default, no handling),
+    /// sequence (snapshot/restore sequences), correlate (RETURNING capture, Phase 2),
+    /// full (sequence + correlate, Phase 2)
     #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
     pub id_mode: crate::correlate::IdMode,
 
