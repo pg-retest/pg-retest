@@ -270,7 +270,13 @@ The irreducible error rate comes from **cross-session concurrent sequence orderi
 4. Use the deterministic compile step: `pg-retest workload compile` pre-resolves all IDs (eliminates runtime races, see design spec)
 5. For performance testing (not correctness testing), the 4-7% error rate is acceptable — you're measuring latency distributions, not data integrity
 
-**The 4-7% error rate is inherent to concurrent workload replay.** Oracle RAT has the same fundamental limitation and documents it as "replay divergence." The only way to achieve 0% is single-session replay or the deterministic workload compile step.
+**The 4-7% error rate is inherent to concurrent workload replay.** Oracle RAT has the same fundamental limitation and documents it as "replay divergence." The root cause is NOT ID remapping failures — it's **execution ordering**: when Session A creates a row and Session B references it, replay must execute A's INSERT before B's reference. With concurrent sessions, this ordering is not guaranteed.
+
+**The `workload compile` step does NOT reduce this error rate** because the IDs are already correct — the problem is that dependent sessions execute in the wrong order. The only way to achieve 0% would be:
+- **Sequential replay** (`--max-connections 1`): eliminates concurrency races but doesn't preserve timing realism
+- **Dependency-graph ordered replay** (future): analyze which sessions depend on each other and enforce ordering constraints (the DoppelGanger++ approach from VLDB 2024)
+
+For performance testing, the 4-7% error rate is acceptable — you're measuring latency distributions, not data integrity. The errors are consistently FK violations on cross-session references, which don't affect the performance characteristics of the queries that succeed.
 
 ## Known Limitations
 
