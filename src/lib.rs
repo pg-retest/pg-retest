@@ -3,6 +3,7 @@ pub mod classify;
 pub mod cli;
 pub mod compare;
 pub mod config;
+pub mod correlate;
 pub mod pipeline;
 pub mod profile;
 pub mod provision;
