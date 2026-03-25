@@ -442,6 +442,40 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         None
     };
 
+    // If implicit capture is enabled, discover primary keys from the target
+    let enable_correlation = args.id_mode.needs_correlation() || args.id_capture_implicit;
+    let pk_map = if args.id_capture_implicit {
+        let rt_tmp = tokio::runtime::Runtime::new()?;
+        match rt_tmp.block_on(async {
+            use pg_retest::correlate::capture::discover_primary_keys;
+            use tokio_postgres::NoTls;
+            let (client, connection) = tokio_postgres::connect(&args.target, NoTls).await?;
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    tracing::error!("PK discovery connection error: {}", e);
+                }
+            });
+            discover_primary_keys(&client).await
+        }) {
+            Ok(pks) => {
+                info!(
+                    "Discovered primary keys for {} tables from target",
+                    pks.len()
+                );
+                Some(pks)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to discover primary keys: {:#}. Implicit RETURNING injection disabled.",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let config = ProxyConfig {
         listen_addr: args.listen,
         target_addr: args.target,
@@ -464,6 +498,9 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
             .as_deref()
             .and_then(|s| parse_duration(s).ok()),
         sequence_snapshot,
+        enable_correlation,
+        id_capture_implicit: args.id_capture_implicit && pk_map.is_some(),
+        pk_map,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

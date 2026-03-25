@@ -22,6 +22,7 @@ use uuid::Uuid;
 use self::capture::{
     build_profile, build_profile_from_staging, run_collector, run_staging_collector, CaptureEvent,
 };
+use self::connection::ImplicitCaptureState;
 use self::control::{build_control_router, CaptureCommand, ControlState};
 use self::pool::SessionPool;
 use self::staging::StagingDb;
@@ -49,6 +50,22 @@ pub struct ProxyConfig {
     pub max_capture_duration: Option<std::time::Duration>,
     /// Pre-captured sequence snapshot to embed in the profile metadata.
     pub sequence_snapshot: Option<Vec<SequenceState>>,
+    /// Enable RETURNING clause correlation capture (id_mode correlate or full).
+    pub enable_correlation: bool,
+    /// Auto-inject RETURNING for bare INSERTs and intercept currval/lastval.
+    pub id_capture_implicit: bool,
+    /// Primary key map for implicit RETURNING injection (discovered at startup).
+    pub pk_map: Option<Vec<crate::correlate::capture::TablePk>>,
+}
+
+/// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
+fn build_implicit_capture_state(config: &ProxyConfig) -> Option<Arc<ImplicitCaptureState>> {
+    if config.id_capture_implicit {
+        let pk_map = config.pk_map.clone().unwrap_or_default();
+        Some(Arc::new(ImplicitCaptureState { pk_map }))
+    } else {
+        None
+    }
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
@@ -72,8 +89,19 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     // Spawn listener (no metrics channel in CLI mode)
     let pool_clone = pool.clone();
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
+    let enable_correlation = config.enable_correlation;
+    let implicit_capture = build_implicit_capture_state(&config);
     let listener_handle = tokio::spawn(async move {
-        listener::run_listener(listener, pool_clone, capture_tx, no_capture, None, false).await
+        listener::run_listener(
+            listener,
+            pool_clone,
+            capture_tx,
+            no_capture,
+            None,
+            enable_correlation,
+            implicit_capture,
+        )
+        .await
     });
 
     // Wait for shutdown signal or duration
@@ -195,6 +223,8 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
 
     let pool_clone = pool.clone();
     let no_capture_clone = no_capture.clone();
+    let enable_correlation = config.enable_correlation;
+    let implicit_capture = build_implicit_capture_state(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -202,7 +232,8 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             persistent_capture_tx,
             no_capture_clone,
             None,
-            false,
+            enable_correlation,
+            implicit_capture,
         )
         .await
     });
@@ -536,6 +567,8 @@ pub async fn run_proxy_managed(
     // Spawn listener with metrics channel
     let pool_clone = pool.clone();
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
+    let enable_correlation = config.enable_correlation;
+    let implicit_capture = build_implicit_capture_state(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -543,7 +576,8 @@ pub async fn run_proxy_managed(
             capture_tx,
             no_capture,
             Some(metrics_tx),
-            false,
+            enable_correlation,
+            implicit_capture,
         )
         .await
     });
@@ -632,6 +666,8 @@ async fn run_proxy_managed_multi(
 
     let pool_clone = pool.clone();
     let no_capture_clone = no_capture.clone();
+    let enable_correlation = config.enable_correlation;
+    let implicit_capture = build_implicit_capture_state(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -639,7 +675,8 @@ async fn run_proxy_managed_multi(
             persistent_capture_tx,
             no_capture_clone,
             Some(metrics_tx),
-            false,
+            enable_correlation,
+            implicit_capture,
         )
         .await
     });

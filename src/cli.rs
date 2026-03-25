@@ -195,6 +195,14 @@ pub struct ReplayArgs {
     /// full (sequence + correlate, Phase 2)
     #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
     pub id_mode: crate::correlate::IdMode,
+
+    /// Auto-inject RETURNING for bare INSERTs and intercept currval/lastval
+    #[arg(long, default_value_t = false)]
+    pub id_capture_implicit: bool,
+
+    /// Register all differing RETURNING column values (not just integers/UUIDs)
+    #[arg(long, default_value_t = false)]
+    pub id_correlate_all_columns: bool,
 }
 
 #[derive(clap::Args)]
@@ -305,6 +313,14 @@ pub struct ProxyArgs {
     /// Source database connection string for sequence snapshot (required when --id-mode sequence or full)
     #[arg(long)]
     pub source_db: Option<String>,
+
+    /// Auto-inject RETURNING for bare INSERTs and intercept currval/lastval
+    #[arg(long, default_value_t = false)]
+    pub id_capture_implicit: bool,
+
+    /// Register all differing RETURNING column values (not just integers/UUIDs)
+    #[arg(long, default_value_t = false)]
+    pub id_correlate_all_columns: bool,
 }
 
 #[derive(clap::Args)]
