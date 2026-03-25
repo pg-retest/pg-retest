@@ -1,0 +1,119 @@
+# pg-retest Replay Toolkit
+#
+# Drop your .wkl file into ./workloads/ and replay against any PG target.
+#
+# Quick start:
+#   1. Copy your workload:  cp my-capture.wkl workloads/
+#   2. Start a target DB:   docker compose up -d target-db
+#   3. Replay:              docker compose run replay my-capture.wkl
+#   4. Compare:             docker compose run compare my-capture.wkl
+#
+# Bring your own target:
+#   docker compose run replay my-capture.wkl \
+#     --target "host=your-db.example.com dbname=myapp user=myuser password=secret"
+
+services:
+  # Default target database — override with your own
+  target-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: replay_target
+      POSTGRES_USER: replay
+      POSTGRES_PASSWORD: replay
+    ports:
+      - "5499:5432"
+    volumes:
+      - target-data:/var/lib/postgresql/data
+      # Mount your schema init script here:
+      # - ./my-schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U replay -d replay_target"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # Replay a workload
+  replay:
+    image: ghcr.io/pg-retest/pg-retest:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    volumes:
+      - ./workloads:/workloads:ro
+      - ./results:/results
+    depends_on:
+      target-db:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        WKL="$${1:-workload.wkl}"
+        TARGET="$${TARGET:-host=target-db dbname=replay_target user=replay password=replay}"
+        ID_MODE="$${ID_MODE:-full}"
+        echo "Replaying /workloads/$$WKL against $$TARGET with --id-mode=$$ID_MODE"
+        pg-retest replay \
+          --workload "/workloads/$$WKL" \
+          --target "$$TARGET" \
+          --id-mode "$$ID_MODE" \
+          --output "/results/$${WKL%.wkl}-results.wkl"
+    environment:
+      - TARGET=host=target-db dbname=replay_target user=replay password=replay
+      - ID_MODE=full
+
+  # Compare source vs replay
+  compare:
+    image: ghcr.io/pg-retest/pg-retest:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    volumes:
+      - ./workloads:/workloads:ro
+      - ./results:/results:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        WKL="$${1:-workload.wkl}"
+        echo "Comparing /workloads/$$WKL vs /results/$${WKL%.wkl}-results.wkl"
+        pg-retest compare \
+          --source "/workloads/$$WKL" \
+          --replay "/results/$${WKL%.wkl}-results.wkl"
+
+  # Inspect a workload
+  inspect:
+    image: ghcr.io/pg-retest/pg-retest:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    volumes:
+      - ./workloads:/workloads:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        WKL="$${1:-workload.wkl}"
+        pg-retest inspect "/workloads/$$WKL"
+
+  # Capture through proxy (mount your app's traffic through this)
+  proxy:
+    image: ghcr.io/pg-retest/pg-retest:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    ports:
+      - "5433:5433"
+    volumes:
+      - ./workloads:/workloads
+    depends_on:
+      target-db:
+        condition: service_healthy
+    entrypoint: ["pg-retest"]
+    command:
+      - proxy
+      - --listen=0.0.0.0:5433
+      - --target=target-db:5432
+      - --id-mode=full
+      - --source-db=host=target-db dbname=replay_target user=replay password=replay
+      - --id-capture-implicit
+      - --output=/workloads/capture.wkl
+
+volumes:
+  target-data:

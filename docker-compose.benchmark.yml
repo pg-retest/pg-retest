@@ -1,0 +1,130 @@
+# pg-retest ID Correlation Benchmark
+#
+# Usage:
+#   docker compose -f docker-compose.benchmark.yml up -d db-a db-b
+#   docker compose -f docker-compose.benchmark.yml run benchmark
+#   docker compose -f docker-compose.benchmark.yml run replay-full
+#   docker compose -f docker-compose.benchmark.yml run replay-none
+#   docker compose -f docker-compose.benchmark.yml down -v
+
+services:
+  db-a:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ecommerce
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - ./demo/init-db-a.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./demo/init-benchmark.sql:/docker-entrypoint-initdb.d/02-benchmark.sql
+    ports:
+      - "5450:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  db-b:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ecommerce
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - ./demo/init-db-a.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./demo/init-benchmark.sql:/docker-entrypoint-initdb.d/02-benchmark.sql
+    ports:
+      - "5451:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # Build pg-retest image with benchmark tools
+  pg-retest:
+    build: .
+    volumes:
+      - benchmark-data:/data
+      - ./demo:/demo:ro
+    depends_on:
+      db-a:
+        condition: service_healthy
+      db-b:
+        condition: service_healthy
+
+  # Generate benchmark workload (capture through proxy)
+  benchmark:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./demo:/app/demo:ro
+      - benchmark-data:/data
+    depends_on:
+      db-a:
+        condition: service_healthy
+      pg-retest:
+        condition: service_started
+    environment:
+      DB_A_HOST: db-a
+      DB_A_PORT: 5432
+      PROXY_HOST: pg-retest
+      PROXY_PORT: 5433
+    command: >
+      bash -c "
+        pip install -q psycopg2-binary &&
+        echo 'Waiting for proxy...' &&
+        sleep 5 &&
+        python3 /app/demo/benchmark_workload.py
+          --db-host db-a --db-port 5432
+          --proxy-host pg-retest --proxy-port 5433
+          --threads 20 --warmup 20 --capture 120 --cooldown 0
+          --skip-schema --capture-only
+      "
+
+  # Replay with --id-mode=full
+  replay-full:
+    build: .
+    volumes:
+      - benchmark-data:/data
+    depends_on:
+      db-b:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/pg-retest"]
+    command: >
+      replay
+        --workload /data/workloads/benchmark.wkl
+        --target "host=db-b dbname=ecommerce user=demo password=demo"
+        --id-mode full
+        --output /data/results/replay-full.wkl
+
+  # Replay with --id-mode=none (baseline comparison)
+  replay-none:
+    build: .
+    volumes:
+      - benchmark-data:/data
+    depends_on:
+      db-b:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/pg-retest"]
+    command: >
+      replay
+        --workload /data/workloads/benchmark.wkl
+        --target "host=db-b dbname=ecommerce user=demo password=demo"
+        --id-mode none
+        --output /data/results/replay-none.wkl
+
+  # Compare results
+  compare:
+    build: .
+    volumes:
+      - benchmark-data:/data
+    entrypoint: ["/usr/local/bin/pg-retest"]
+    command: >
+      compare
+        --source /data/workloads/benchmark.wkl
+        --replay /data/results/replay-full.wkl
+
+volumes:
+  benchmark-data:
