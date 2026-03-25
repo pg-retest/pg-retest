@@ -358,6 +358,72 @@ pub fn extract_backend_key_data(msg: &PgMessage) -> Option<(i32, i32)> {
     Some((pid, secret))
 }
 
+/// Parse RowDescription ('T') message — returns column names.
+/// Body: Int16 (num columns), then per column:
+///   String (name\0), Int32 (table OID), Int16 (col num), Int32 (type OID),
+///   Int16 (type size), Int32 (type mod), Int16 (format code) = 18 bytes after name
+pub fn extract_row_description(msg: &PgMessage) -> Option<Vec<String>> {
+    if msg.msg_type != b'T' {
+        return None;
+    }
+    let body = msg.body();
+    if body.len() < 2 {
+        return None;
+    }
+    let num_cols = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let mut columns = Vec::with_capacity(num_cols);
+    let mut pos = 2;
+    for _ in 0..num_cols {
+        let name_end = body[pos..].iter().position(|&b| b == 0)?;
+        let name = String::from_utf8_lossy(&body[pos..pos + name_end]).into_owned();
+        pos += name_end + 1;
+        pos += 18; // skip table_oid(4) + col_num(2) + type_oid(4) + type_size(2) + type_mod(4) + format(2)
+        if pos > body.len() {
+            return None;
+        }
+        columns.push(name);
+    }
+    Some(columns)
+}
+
+/// Parse DataRow ('D') message — returns column values as text strings.
+/// Body: Int16 (num columns), then per column: Int32 (length, -1=NULL), bytes
+pub fn extract_data_row(msg: &PgMessage, num_columns: usize) -> Option<Vec<Option<String>>> {
+    if msg.msg_type != b'D' {
+        return None;
+    }
+    let body = msg.body();
+    if body.len() < 2 {
+        return None;
+    }
+    let num_cols = u16::from_be_bytes([body[0], body[1]]) as usize;
+    if num_cols != num_columns {
+        return None;
+    }
+    let mut values = Vec::with_capacity(num_cols);
+    let mut pos = 2;
+    for _ in 0..num_cols {
+        if pos + 4 > body.len() {
+            return None;
+        }
+        let len = i32::from_be_bytes([body[pos], body[pos + 1], body[pos + 2], body[pos + 3]]);
+        pos += 4;
+        if len == -1 {
+            values.push(None);
+        } else {
+            let len = len as usize;
+            if pos + len > body.len() {
+                return None;
+            }
+            values.push(Some(
+                String::from_utf8_lossy(&body[pos..pos + len]).into_owned(),
+            ));
+            pos += len;
+        }
+    }
+    Some(values)
+}
+
 /// Format parameter values from a Bind message as strings for capture.
 /// Text parameters are converted to strings; binary params shown as description.
 /// NULL parameters become the string "NULL".
@@ -603,5 +669,74 @@ mod tests {
         assert_eq!(formatted[0], "'hello'");
         assert_eq!(formatted[1], "NULL");
         assert_eq!(formatted[2], "'42'");
+    }
+
+    /// Helper to build a RowDescription column entry (name + 18 bytes of field metadata).
+    fn row_desc_column(name: &str) -> Vec<u8> {
+        let mut col = Vec::new();
+        col.extend_from_slice(name.as_bytes());
+        col.push(0); // null terminator
+        col.extend_from_slice(&[0u8; 18]); // table_oid(4) + col_num(2) + type_oid(4) + type_size(2) + type_mod(4) + format(2)
+        col
+    }
+
+    /// Helper to build a PgMessage from type byte and body bytes.
+    fn make_pg_message(msg_type: u8, body: &[u8]) -> PgMessage {
+        let len = (body.len() + 4) as i32;
+        let mut p = BytesMut::new();
+        p.put_slice(&len.to_be_bytes());
+        p.put_slice(body);
+        PgMessage {
+            msg_type,
+            payload: p,
+        }
+    }
+
+    #[test]
+    fn test_extract_row_description_single_column() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_be_bytes()); // 1 column
+        body.extend_from_slice(&row_desc_column("id"));
+        let msg = make_pg_message(b'T', &body);
+        let cols = extract_row_description(&msg).unwrap();
+        assert_eq!(cols, vec!["id"]);
+    }
+
+    #[test]
+    fn test_extract_row_description_two_columns() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u16.to_be_bytes()); // 2 columns
+        body.extend_from_slice(&row_desc_column("id"));
+        body.extend_from_slice(&row_desc_column("name"));
+        let msg = make_pg_message(b'T', &body);
+        let cols = extract_row_description(&msg).unwrap();
+        assert_eq!(cols, vec!["id", "name"]);
+    }
+
+    #[test]
+    fn test_extract_data_row_single_value() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_be_bytes()); // 1 column
+        body.extend_from_slice(&2i32.to_be_bytes()); // length 2
+        body.extend_from_slice(b"42");
+        let msg = make_pg_message(b'D', &body);
+        let values = extract_data_row(&msg, 1).unwrap();
+        assert_eq!(values, vec![Some("42".to_string())]);
+    }
+
+    #[test]
+    fn test_extract_data_row_null_value() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_be_bytes()); // 1 column
+        body.extend_from_slice(&(-1i32).to_be_bytes()); // NULL
+        let msg = make_pg_message(b'D', &body);
+        let values = extract_data_row(&msg, 1).unwrap();
+        assert_eq!(values, vec![None]);
+    }
+
+    #[test]
+    fn test_extract_data_row_wrong_type() {
+        let msg = make_pg_message(b'Q', b"SELECT 1\0");
+        assert!(extract_data_row(&msg, 1).is_none());
     }
 }
