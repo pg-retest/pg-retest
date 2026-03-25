@@ -71,7 +71,7 @@ class SchemaAnalyzer:
         cur.execute("""
             SELECT column_name, data_type, character_maximum_length,
                    numeric_precision, numeric_scale, column_default,
-                   is_nullable, udt_name
+                   is_nullable, udt_name, is_identity
             FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = %s
             ORDER BY ordinal_position
@@ -92,10 +92,20 @@ class SchemaAnalyzer:
         pk_cols = [r[0] for r in cur.fetchall()]
 
         lines = []
-        for col_name, data_type, char_len, num_prec, num_scale, default, nullable, udt in columns:
+        for col_name, data_type, char_len, num_prec, num_scale, default, nullable, udt, is_ident in columns:
             col_type = self._pg_type_str(data_type, char_len, num_prec, num_scale, udt)
             parts = [f"    {col_name} {col_type}"]
-            if default and ("nextval" in str(default)):
+            if is_ident == "YES":
+                # Identity column — use GENERATED ... AS IDENTITY
+                cur2 = self.conn.cursor()
+                cur2.execute("""
+                    SELECT identity_generation FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
+                """, (table, col_name))
+                gen_row = cur2.fetchone()
+                gen_type = gen_row[0] if gen_row else "BY DEFAULT"
+                parts = [f"    {col_name} {col_type} GENERATED {gen_type} AS IDENTITY"]
+            elif default and ("nextval" in str(default)):
                 # Replace sequence defaults with SERIAL-style for portability
                 if "bigint" in col_type.lower():
                     parts = [f"    {col_name} BIGSERIAL"]
@@ -184,7 +194,7 @@ class SchemaAnalyzer:
         row_count = cur.fetchone()[0]
 
         cur.execute("""
-            SELECT column_name, data_type, udt_name
+            SELECT column_name, data_type, udt_name, column_default, is_identity
             FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = %s
             ORDER BY ordinal_position
@@ -193,8 +203,12 @@ class SchemaAnalyzer:
 
         stats = {"row_count": row_count, "columns": {}}
 
-        for col_name, data_type, udt in columns:
-            col_stats = {"type": udt}
+        for col_name, data_type, udt, default, is_ident in columns:
+            col_stats = {
+                "type": udt,
+                "default": default or "",
+                "is_identity": is_ident == "YES",
+            }
 
             if udt in ("int4", "int8", "int2", "float4", "float8", "numeric"):
                 cur.execute(f"SELECT min({col_name}), max({col_name}) FROM {table}")
@@ -446,8 +460,10 @@ class DataGenerator:
             for col_name, col_stats in stats["columns"].items():
                 col_type = col_stats["type"]
 
-                # Skip serial/identity PKs — let the DB generate them
-                if col_name == "id" and col_type in ("int4", "int8"):
+                # Skip serial/identity/generated PKs — let the DB generate them
+                is_serial = col_stats.get("default", "").startswith("nextval(")
+                is_identity = col_stats.get("is_identity", False)
+                if (col_name == "id" and col_type in ("int4", "int8")) or is_serial or is_identity:
                     continue
 
                 # FK reference — pick from parent data
