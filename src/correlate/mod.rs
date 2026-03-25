@@ -1,5 +1,7 @@
 pub mod capture;
+pub mod map;
 pub mod sequence;
+pub mod substitute;
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
