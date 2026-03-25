@@ -83,6 +83,11 @@ Key modules:
 - `tuner::advisor` — TuningAdvisor trait with Claude/OpenAI/Gemini/Bedrock/Ollama providers (120s request timeout)
 - `tuner::safety` — Parameter allowlist, blocked operations, production hostname check
 - `tuner::apply` — Recommendation application with rollback tracking (ConfigChange via ALTER SYSTEM RESET, CreateIndex via DROP INDEX)
+- `correlate` — ID correlation module for database-generated ID handling during replay
+- `correlate::sequence` — `SequenceState`, `snapshot_sequences()`, `restore_sequences()` — PG sequence snapshot at capture time, setval() restore before replay
+- `correlate::capture` — `ResponseRow`, `TablePk`, `has_returning()`, `inject_returning()`, `is_currval_or_lastval()`, `discover_primary_keys()` — RETURNING detection, auto-injection, PK discovery
+- `correlate::map` — `IdMap` wrapper around `Arc<DashMap>` for lock-free cross-session ID mapping. `register()`, `substitute()`, `get()`, `len()`
+- `correlate::substitute` — SQL substitution state machine (character-level lexer with positional context filtering). `substitute_ids()` rewrites SQL literals using the ID map.
 - `cli` — Clap derive-based CLI argument structs (11 subcommands: capture, replay, compare, inspect, proxy, run, ab, web, transform, tune)
 - `web` — Axum HTTP server + WebSocket dashboard (embedded static files via rust-embed, SQLite metadata via rusqlite)
 - `web::db` — SQLite schema + CRUD for workloads, runs, proxy_sessions, threshold_results, tuning_reports
@@ -116,6 +121,7 @@ Key modules:
 - **Docker Demo** — Complete. Docker Compose with pg-retest + db-a (seeded) + db-b (seeded). E-commerce schema (5 tables, ~94k rows). Demo page with 5-step wizard + 4 scenario cards. `PG_RETEST_DEMO=true` env var activation.
 - **Workload Transform** — Complete. AI-powered workload transformation (`pg-retest transform analyze|plan|apply`). 3-layer architecture: deterministic Analyzer (Union-Find table grouping), multi-provider LLM Planner (Claude/OpenAI/Gemini/Bedrock/Ollama), deterministic Engine (weighted session duplication, query injection, group removal). TOML transform plans as intermediate artifact. Design at `docs/plans/2026-03-07-workload-transform-design.md`. 201 tests.
 - **M5: AI-Assisted Tuning** — Complete. Multi-provider LLM tuning (`pg-retest tune`). Configurable loop: collect PG context → LLM recommendations → safety validation → apply → replay → compare → auto-rollback on p95 regression → iterate. 4 recommendation types (config, index, query rewrite, schema). Safety allowlist (~41 safe PG params), production hostname check. 5 providers: Claude/OpenAI/Gemini/Bedrock/Ollama. Tuning report persistence to SQLite. Dry-run default. Web dashboard tuning page with history and recommendations. 232 tests.
+- **ID Correlation** — Complete. Tiered `--id-mode` (none/sequence/correlate/full), proxy RETURNING capture, cross-session DashMap, SQL substitution state machine, stealth mode, auto-inject RETURNING, sequence snapshot/restore, auto restore point creation. 176 tests, 6 criterion benchmarks.
 
 ## Gotchas
 
@@ -179,6 +185,16 @@ Key modules:
 - Persistent proxy: connections established before capture is toggled ON are now captured (late-join session support).
 - API key validation: `tune` command validates API key presence at startup for claude/openai/gemini providers.
 - Compare: `compute_comparison()` accepts optional `ReplayMode` to filter source queries. ReadOnly mode no longer includes DML queries in source percentiles.
+- `--id-mode` defaults to `none`. Four modes: none, sequence, correlate, full. `full` = sequence + correlate combined.
+- `--id-capture-implicit` auto-injects RETURNING for bare INSERTs and intercepts currval/lastval. Off by default. Requires `--source-db` for PK discovery.
+- Stealth mode (default when `--id-capture-implicit` is on): proxy strips auto-injected RETURNING DataRows before forwarding to client. Use `--no-stealth` to forward them.
+- The proxy auto-creates a `pg_create_restore_point('pg_retest_capture_YYYYMMDD_HHMMSS')` when `--source-db` is provided. Requires superuser or pg_create_restore_point privilege.
+- `QueryReturning` events must be sent AFTER `QueryComplete` in the capture pipeline — ordering matters for response_values attachment.
+- ID map (`DashMap`) is shared across all replay sessions via `Arc`. Cross-session timing race at tight windows (~4-7% error rate for concurrent write workloads).
+- `substitute_ids()` uses single-literal eligibility scope — LIMIT/OFFSET ineligibility resets after consuming one literal.
+- Profile format additions are backward-compatible: `response_values: Option<Vec<ResponseRow>>` on Query, `sequence_snapshot: Option<Vec<SequenceState>>` and `pk_map: Option<Vec<TablePk>>` on Metadata.
+- `dashmap` crate used for lock-free concurrent ID map.
+- PK discovery uses `--source-db` connection string (not `--target` which is host:port format).
 
 ## Conventions
 
