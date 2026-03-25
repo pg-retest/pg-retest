@@ -17,8 +17,20 @@ services:
     volumes:
       - ./demo/init-db-a.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./demo/init-benchmark.sql:/docker-entrypoint-initdb.d/02-benchmark.sql
+      - wal-archive-a:/var/lib/postgresql/wal_archive
+      - base-backup-a:/backups
     ports:
       - "5450:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=mkdir -p /var/lib/postgresql/wal_archive && cp %p /var/lib/postgresql/wal_archive/%f
+      - -c
+      - max_wal_senders=3
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
       interval: 3s
@@ -128,3 +140,5 @@ services:
 
 volumes:
   benchmark-data:
+  wal-archive-a:
+  base-backup-a:
