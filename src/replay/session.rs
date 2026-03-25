@@ -112,6 +112,10 @@ pub async fn replay_session(
                             if let Ok(Some(replay_val)) = row.try_get(idx) {
                                 let replay_val: &str = replay_val;
                                 if replay_val != captured_val {
+                                    debug!(
+                                        "ID map: '{}' -> '{}' (session {}, col {})",
+                                        captured_val, replay_val, session.id, idx
+                                    );
                                     map.register(captured_val.clone(), replay_val.to_string());
                                 }
                             }
