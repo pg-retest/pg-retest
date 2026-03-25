@@ -72,6 +72,9 @@ async fn start_proxy(
         max_capture_bytes: 0,
         max_capture_duration: None,
         sequence_snapshot: None,
+        enable_correlation: false,
+        id_capture_implicit: false,
+        pk_map: None,
     };
 
     let cancel_token = CancellationToken::new();
@@ -391,6 +394,9 @@ async fn test_proxy_no_capture_mode() {
         max_capture_bytes: 0,
         max_capture_duration: None,
         sequence_snapshot: None,
+        enable_correlation: false,
+        id_capture_implicit: false,
+        pk_map: None,
     };
 
     let cancel_token = CancellationToken::new();
@@ -467,6 +473,9 @@ async fn test_proxy_duration_shutdown() {
         max_capture_bytes: 0,
         max_capture_duration: None,
         sequence_snapshot: None,
+        enable_correlation: false,
+        id_capture_implicit: false,
+        pk_map: None,
     };
 
     let cancel_token = CancellationToken::new();

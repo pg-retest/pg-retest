@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 use super::capture::CaptureEvent;
-use super::connection::{handle_connection, CorrelateState};
+use super::connection::{handle_connection, CorrelateState, ImplicitCaptureState};
 use super::pool::SessionPool;
 
 /// Run the TCP accept loop.
@@ -18,6 +18,7 @@ pub async fn run_listener(
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     enable_correlation: bool,
+    implicit_capture: Option<Arc<ImplicitCaptureState>>,
 ) -> Result<()> {
     let session_counter = AtomicU64::new(1);
     let addr = listener.local_addr()?;
@@ -30,9 +31,11 @@ pub async fn run_listener(
         let capture_tx = capture_tx.clone();
         let metrics_tx = metrics_tx.clone();
         let no_capture = no_capture.clone();
+        let implicit_capture = implicit_capture.clone();
 
         // Each connection gets its own CorrelateState (per-connection queue)
-        let correlate = if enable_correlation {
+        // Enable correlation if either explicit correlation or implicit capture is active
+        let correlate = if enable_correlation || implicit_capture.is_some() {
             Some(Arc::new(CorrelateState::new()))
         } else {
             None
@@ -49,6 +52,7 @@ pub async fn run_listener(
                 no_capture,
                 metrics_tx,
                 correlate,
+                implicit_capture,
             )
             .await;
         });

@@ -177,6 +177,21 @@ async fn read_byte<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Option<u8>> {
 
 /// Extract SQL text from a Query ('Q') message.
 /// Body is: SQL string followed by null terminator.
+/// Build a Query ('Q') message from a SQL string.
+pub fn build_query_message(sql: &str) -> PgMessage {
+    let sql_bytes = sql.as_bytes();
+    // Length = 4 (length field) + sql bytes + 1 (null terminator)
+    let len = 4 + sql_bytes.len() + 1;
+    let mut payload = BytesMut::with_capacity(len);
+    payload.put_i32(len as i32);
+    payload.put_slice(sql_bytes);
+    payload.put_u8(0); // null terminator
+    PgMessage {
+        msg_type: b'Q',
+        payload,
+    }
+}
+
 pub fn extract_query_sql(msg: &PgMessage) -> Option<String> {
     if msg.msg_type != b'Q' {
         return None;

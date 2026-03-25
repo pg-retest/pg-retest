@@ -13,10 +13,11 @@ use tracing::{debug, warn};
 use super::capture::CaptureEvent;
 use super::pool::SessionPool;
 use super::protocol::{
-    self, extract_bind, extract_data_row, extract_error_message, extract_parse, extract_query_sql,
-    extract_row_description, format_bind_params, inline_bind_params, StartupType,
+    self, build_query_message, extract_bind, extract_data_row, extract_error_message,
+    extract_parse, extract_query_sql, extract_row_description, format_bind_params,
+    inline_bind_params, StartupType,
 };
-use crate::correlate::capture::has_returning;
+use crate::correlate::capture::{has_returning, inject_returning, is_currval_or_lastval, TablePk};
 
 /// Shared state for RETURNING clause detection and DataRow capture.
 ///
@@ -43,6 +44,15 @@ impl CorrelateState {
     }
 }
 
+/// Shared state for implicit RETURNING injection (`--id-capture-implicit`).
+///
+/// Holds the primary key map discovered at proxy startup. This is shared
+/// across all connections (read-only after construction).
+pub struct ImplicitCaptureState {
+    /// Primary key columns per table, used by `inject_returning()`.
+    pub pk_map: Vec<TablePk>,
+}
+
 /// Handle a single client connection through its full lifecycle.
 pub async fn handle_connection(
     client_stream: TcpStream,
@@ -52,6 +62,7 @@ pub async fn handle_connection(
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
+    implicit_capture: Option<Arc<ImplicitCaptureState>>,
 ) {
     if let Err(e) = handle_connection_inner(
         client_stream,
@@ -61,6 +72,7 @@ pub async fn handle_connection(
         no_capture,
         metrics_tx,
         correlate,
+        implicit_capture,
     )
     .await
     {
@@ -76,6 +88,7 @@ async fn handle_connection_inner(
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
+    implicit_capture: Option<Arc<ImplicitCaptureState>>,
 ) -> Result<()> {
     // ── Phase 1: Startup ────────────────────────────────────────────
     // Read the first message from client (no type byte — startup message)
@@ -165,6 +178,7 @@ async fn handle_connection_inner(
         let stmt_cache = stmt_cache.clone();
         let no_capture = no_capture.clone();
         let correlate = correlate.clone();
+        let implicit_capture = implicit_capture.clone();
         async move {
             relay_client_to_server(
                 client_read,
@@ -175,6 +189,7 @@ async fn handle_connection_inner(
                 no_capture,
                 metrics_tx,
                 correlate,
+                implicit_capture,
             )
             .await
         }
@@ -271,6 +286,7 @@ async fn relay_client_to_server(
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
+    implicit_capture: Option<Arc<ImplicitCaptureState>>,
 ) -> Result<()> {
     loop {
         let msg = match protocol::read_message(&mut client).await? {
@@ -283,14 +299,46 @@ async fn relay_client_to_server(
                 b'Q' => {
                     // Simple query
                     if let Some(sql) = extract_query_sql(&msg) {
+                        // Implicit capture: check for currval/lastval or inject RETURNING
+                        let (capture_sql, has_ret) = if let Some(ref ic) = implicit_capture {
+                            if is_currval_or_lastval(&sql) {
+                                // currval/lastval returns a value we want to correlate
+                                (sql.clone(), true)
+                            } else if let Some(injected) = inject_returning(&sql, &ic.pk_map) {
+                                // Bare INSERT → inject RETURNING, rewrite the message sent to server
+                                let rewritten = build_query_message(&injected);
+                                protocol::write_message(&mut server, &rewritten).await?;
+                                server.flush().await?;
+
+                                // Track RETURNING for correlation
+                                if let Some(ref cs) = correlate {
+                                    cs.returning_queue.lock().await.push_back(true);
+                                }
+                                let event = CaptureEvent::QueryStart {
+                                    session_id,
+                                    sql,
+                                    timestamp: Instant::now(),
+                                };
+                                if let Some(ref mtx) = metrics_tx {
+                                    let _ = mtx.send(event.clone());
+                                }
+                                let _ = capture_tx.send(event);
+                                // Skip the normal write_message at the end — we already sent the rewritten query
+                                continue;
+                            } else {
+                                (sql.clone(), has_returning(&sql))
+                            }
+                        } else {
+                            (sql.clone(), has_returning(&sql))
+                        };
+
                         // Track RETURNING for correlation
                         if let Some(ref cs) = correlate {
-                            let has_ret = has_returning(&sql);
                             cs.returning_queue.lock().await.push_back(has_ret);
                         }
                         let event = CaptureEvent::QueryStart {
                             session_id,
-                            sql,
+                            sql: capture_sql,
                             timestamp: Instant::now(),
                         };
                         if let Some(ref mtx) = metrics_tx {
@@ -304,7 +352,13 @@ async fn relay_client_to_server(
                     if let Some(parsed) = extract_parse(&msg) {
                         // Track RETURNING for correlation
                         if let Some(ref cs) = correlate {
-                            let has_ret = has_returning(&parsed.sql);
+                            let has_ret = if let Some(ref ic) = implicit_capture {
+                                is_currval_or_lastval(&parsed.sql)
+                                    || has_returning(&parsed.sql)
+                                    || inject_returning(&parsed.sql, &ic.pk_map).is_some()
+                            } else {
+                                has_returning(&parsed.sql)
+                            };
                             cs.returning_queue.lock().await.push_back(has_ret);
                         }
                         let mut cache = stmt_cache.lock().await;
