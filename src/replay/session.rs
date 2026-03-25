@@ -128,7 +128,13 @@ pub async fn replay_session(
         let (success, error) = match result {
             Ok(_) => (true, None),
             Err(e) => {
-                debug!("Query error in session {}: {e}", session.id);
+                // Extract the actual PostgreSQL error message (DbError)
+                let err_msg = if let Some(db_err) = e.as_db_error() {
+                    format!("{}: {}", db_err.severity(), db_err.message())
+                } else {
+                    format!("{e}")
+                };
+                debug!("Query error in session {}: {}", session.id, err_msg);
 
                 // If this query is inside a transaction, issue ROLLBACK and mark txn as failed
                 if let Some(txn_id) = query.transaction_id {
@@ -142,7 +148,7 @@ pub async fn replay_session(
                     }
                 }
 
-                (false, Some(e.to_string()))
+                (false, Some(err_msg))
             }
         };
 
