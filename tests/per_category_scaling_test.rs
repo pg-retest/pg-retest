@@ -18,6 +18,8 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
             total_queries,
             total_sessions,
             capture_duration_us: 10000,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }
@@ -35,6 +37,7 @@ fn analytical_session(id: u64) -> Session {
                 duration_us: 50_000,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "SELECT * FROM another_table".into(),
@@ -42,6 +45,7 @@ fn analytical_session(id: u64) -> Session {
                 duration_us: 30_000,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
         ],
     }
@@ -60,6 +64,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 50,
                 kind: QueryKind::Begin,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO orders VALUES (1)".into(),
@@ -67,6 +72,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 500,
                 kind: QueryKind::Insert,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "COMMIT".into(),
@@ -74,6 +80,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 50,
                 kind: QueryKind::Commit,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "BEGIN".into(),
@@ -81,6 +88,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 50,
                 kind: QueryKind::Begin,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "UPDATE orders SET status = 'shipped'".into(),
@@ -88,6 +96,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 800,
                 kind: QueryKind::Update,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "SELECT id FROM orders".into(),
@@ -95,6 +104,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 300,
                 kind: QueryKind::Select,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "COMMIT".into(),
@@ -102,6 +112,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 50,
                 kind: QueryKind::Commit,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "BEGIN".into(),
@@ -109,6 +120,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 50,
                 kind: QueryKind::Begin,
                 transaction_id: Some(3),
+                response_values: None,
             },
             Query {
                 sql: "DELETE FROM old_orders WHERE created < now()".into(),
@@ -116,6 +128,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 400,
                 kind: QueryKind::Delete,
                 transaction_id: Some(3),
+                response_values: None,
             },
             Query {
                 sql: "COMMIT".into(),
@@ -123,6 +136,7 @@ fn transactional_session(id: u64) -> Session {
                 duration_us: 50,
                 kind: QueryKind::Commit,
                 transaction_id: Some(3),
+                response_values: None,
             },
         ],
     }

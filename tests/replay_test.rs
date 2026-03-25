@@ -10,6 +10,7 @@ fn test_replay_mode_read_only_filters_dml() {
             duration_us: 100,
             kind: QueryKind::Select,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "INSERT INTO foo VALUES (1)".into(),
@@ -17,6 +18,7 @@ fn test_replay_mode_read_only_filters_dml() {
             duration_us: 200,
             kind: QueryKind::Insert,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "SELECT 2".into(),
@@ -24,6 +26,7 @@ fn test_replay_mode_read_only_filters_dml() {
             duration_us: 150,
             kind: QueryKind::Select,
             transaction_id: None,
+            response_values: None,
         },
     ];
 
@@ -46,6 +49,7 @@ fn test_replay_mode_read_write_keeps_all() {
             duration_us: 100,
             kind: QueryKind::Select,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "INSERT INTO foo VALUES (1)".into(),
@@ -53,6 +57,7 @@ fn test_replay_mode_read_write_keeps_all() {
             duration_us: 200,
             kind: QueryKind::Insert,
             transaction_id: None,
+            response_values: None,
         },
     ];
 
@@ -102,6 +107,7 @@ fn test_read_only_mode_filters_transaction_control() {
             duration_us: 10,
             kind: QueryKind::Begin,
             transaction_id: Some(1),
+            response_values: None,
         },
         Query {
             sql: "SELECT 1".into(),
@@ -109,6 +115,7 @@ fn test_read_only_mode_filters_transaction_control() {
             duration_us: 100,
             kind: QueryKind::Select,
             transaction_id: Some(1),
+            response_values: None,
         },
         Query {
             sql: "UPDATE t SET x=1".into(),
@@ -116,6 +123,7 @@ fn test_read_only_mode_filters_transaction_control() {
             duration_us: 500,
             kind: QueryKind::Update,
             transaction_id: Some(1),
+            response_values: None,
         },
         Query {
             sql: "COMMIT".into(),
@@ -123,6 +131,7 @@ fn test_read_only_mode_filters_transaction_control() {
             duration_us: 20,
             kind: QueryKind::Commit,
             transaction_id: Some(1),
+            response_values: None,
         },
     ];
 
@@ -144,6 +153,7 @@ fn test_read_write_mode_keeps_transaction_control() {
             duration_us: 10,
             kind: QueryKind::Begin,
             transaction_id: Some(1),
+            response_values: None,
         },
         Query {
             sql: "UPDATE t SET x=1".into(),
@@ -151,6 +161,7 @@ fn test_read_write_mode_keeps_transaction_control() {
             duration_us: 500,
             kind: QueryKind::Update,
             transaction_id: Some(1),
+            response_values: None,
         },
         Query {
             sql: "COMMIT".into(),
@@ -158,6 +169,7 @@ fn test_read_write_mode_keeps_transaction_control() {
             duration_us: 20,
             kind: QueryKind::Commit,
             transaction_id: Some(1),
+            response_values: None,
         },
     ];
 

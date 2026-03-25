@@ -23,6 +23,7 @@ fn test_profile_roundtrip_messagepack() {
                         duration_us: 500,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "UPDATE users SET name = 'test' WHERE id = 1".into(),
@@ -30,6 +31,7 @@ fn test_profile_roundtrip_messagepack() {
                         duration_us: 1200,
                         kind: QueryKind::Update,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             },
@@ -43,6 +45,7 @@ fn test_profile_roundtrip_messagepack() {
                     duration_us: 3000,
                     kind: QueryKind::Select,
                     transaction_id: None,
+                    response_values: None,
                 }],
             },
         ],
@@ -50,6 +53,8 @@ fn test_profile_roundtrip_messagepack() {
             total_queries: 3,
             total_sessions: 2,
             capture_duration_us: 5000,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     };
 
@@ -156,6 +161,7 @@ fn test_profile_roundtrip_with_transaction_id() {
                     duration_us: 10,
                     kind: QueryKind::Begin,
                     transaction_id: Some(1),
+                    response_values: None,
                 },
                 Query {
                     sql: "UPDATE t SET x=1".into(),
@@ -163,6 +169,7 @@ fn test_profile_roundtrip_with_transaction_id() {
                     duration_us: 500,
                     kind: QueryKind::Update,
                     transaction_id: Some(1),
+                    response_values: None,
                 },
                 Query {
                     sql: "COMMIT".into(),
@@ -170,6 +177,7 @@ fn test_profile_roundtrip_with_transaction_id() {
                     duration_us: 20,
                     kind: QueryKind::Commit,
                     transaction_id: Some(1),
+                    response_values: None,
                 },
                 Query {
                     sql: "SELECT 1".into(),
@@ -177,6 +185,7 @@ fn test_profile_roundtrip_with_transaction_id() {
                     duration_us: 100,
                     kind: QueryKind::Select,
                     transaction_id: None,
+                    response_values: None,
                 },
             ],
         }],
@@ -184,6 +193,8 @@ fn test_profile_roundtrip_with_transaction_id() {
             total_queries: 4,
             total_sessions: 1,
             capture_duration_us: 300,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     };
 
@@ -217,12 +228,15 @@ fn test_v1_profile_deserializes_with_none_transaction_id() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None, // simulates a v1 profile
+                response_values: None,
             }],
         }],
         metadata: Metadata {
             total_queries: 1,
             total_sessions: 1,
             capture_duration_us: 100,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     };
 
@@ -261,6 +275,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 10,
             kind: QueryKind::Begin,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "INSERT INTO t VALUES (1)".into(),
@@ -268,6 +283,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 50,
             kind: QueryKind::Insert,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "SAVEPOINT sp1".into(),
@@ -275,6 +291,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 10,
             kind: QueryKind::Other,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "INSERT INTO t VALUES (2)".into(),
@@ -282,6 +299,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 50,
             kind: QueryKind::Insert,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "ROLLBACK TO sp1".into(),
@@ -289,6 +307,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 10,
             kind: QueryKind::Other, // NOT Rollback
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "INSERT INTO t VALUES (3)".into(),
@@ -296,6 +315,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 50,
             kind: QueryKind::Insert,
             transaction_id: None,
+            response_values: None,
         },
         Query {
             sql: "COMMIT".into(),
@@ -303,6 +323,7 @@ fn test_transaction_ids_preserved_through_savepoint_rollback() {
             duration_us: 10,
             kind: QueryKind::Commit,
             transaction_id: None,
+            response_values: None,
         },
     ];
 

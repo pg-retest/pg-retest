@@ -17,6 +17,8 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
             total_queries,
             total_sessions,
             capture_duration_us: 10000,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }
@@ -33,6 +35,7 @@ fn test_scale_sessions_1x_returns_original() {
             duration_us: 100,
             kind: QueryKind::Select,
             transaction_id: None,
+            response_values: None,
         }],
     }]);
 
@@ -54,6 +57,7 @@ fn test_scale_sessions_3x() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         },
         Session {
@@ -66,6 +70,7 @@ fn test_scale_sessions_3x() {
                 duration_us: 200,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         },
     ]);
@@ -97,6 +102,7 @@ fn test_scale_sessions_stagger() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "SELECT 2".into(),
@@ -104,6 +110,7 @@ fn test_scale_sessions_stagger() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
         ],
     }]);
@@ -131,6 +138,7 @@ fn test_check_write_safety_no_writes() {
             duration_us: 100,
             kind: QueryKind::Select,
             transaction_id: None,
+            response_values: None,
         }],
     }]);
 
@@ -150,6 +158,7 @@ fn test_check_write_safety_with_writes() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO t VALUES (1)".into(),
@@ -157,6 +166,7 @@ fn test_check_write_safety_with_writes() {
                 duration_us: 200,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
         ],
     }]);

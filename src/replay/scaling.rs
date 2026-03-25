@@ -27,6 +27,7 @@ pub fn scale_sessions(profile: &WorkloadProfile, scale: u32, stagger_ms: u64) ->
                     duration_us: q.duration_us,
                     kind: q.kind,
                     transaction_id: q.transaction_id,
+                    response_values: None,
                 })
                 .collect();
 
@@ -129,6 +130,7 @@ pub fn scale_sessions_by_class(
                         duration_us: q.duration_us,
                         kind: q.kind,
                         transaction_id: q.transaction_id,
+                        response_values: None,
                     })
                     .collect();
 

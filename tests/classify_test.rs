@@ -25,6 +25,8 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
             total_queries,
             total_sessions,
             capture_duration_us: 10000,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }
@@ -41,6 +43,7 @@ fn test_classify_analytical_session() {
                 duration_us: 50_000, // 50ms
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "SELECT count(*) FROM orders".into(),
@@ -48,6 +51,7 @@ fn test_classify_analytical_session() {
                 duration_us: 30_000, // 30ms
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "SELECT sum(total) FROM orders GROUP BY region".into(),
@@ -55,6 +59,7 @@ fn test_classify_analytical_session() {
                 duration_us: 100_000, // 100ms
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
         ],
     );
@@ -77,6 +82,7 @@ fn test_classify_transactional_session() {
                 duration_us: 10,
                 kind: QueryKind::Begin,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "SELECT balance FROM accounts".into(),
@@ -84,6 +90,7 @@ fn test_classify_transactional_session() {
                 duration_us: 500,
                 kind: QueryKind::Select,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "UPDATE accounts SET balance = 100".into(),
@@ -91,6 +98,7 @@ fn test_classify_transactional_session() {
                 duration_us: 800,
                 kind: QueryKind::Update,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "COMMIT".into(),
@@ -98,6 +106,7 @@ fn test_classify_transactional_session() {
                 duration_us: 20,
                 kind: QueryKind::Commit,
                 transaction_id: Some(1),
+                response_values: None,
             },
             Query {
                 sql: "BEGIN".into(),
@@ -105,6 +114,7 @@ fn test_classify_transactional_session() {
                 duration_us: 10,
                 kind: QueryKind::Begin,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO log VALUES (1)".into(),
@@ -112,6 +122,7 @@ fn test_classify_transactional_session() {
                 duration_us: 600,
                 kind: QueryKind::Insert,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "COMMIT".into(),
@@ -119,6 +130,7 @@ fn test_classify_transactional_session() {
                 duration_us: 20,
                 kind: QueryKind::Commit,
                 transaction_id: Some(2),
+                response_values: None,
             },
             Query {
                 sql: "BEGIN".into(),
@@ -126,6 +138,7 @@ fn test_classify_transactional_session() {
                 duration_us: 10,
                 kind: QueryKind::Begin,
                 transaction_id: Some(3),
+                response_values: None,
             },
             Query {
                 sql: "UPDATE accounts SET balance = 200".into(),
@@ -133,6 +146,7 @@ fn test_classify_transactional_session() {
                 duration_us: 900,
                 kind: QueryKind::Update,
                 transaction_id: Some(3),
+                response_values: None,
             },
             Query {
                 sql: "COMMIT".into(),
@@ -140,6 +154,7 @@ fn test_classify_transactional_session() {
                 duration_us: 20,
                 kind: QueryKind::Commit,
                 transaction_id: Some(3),
+                response_values: None,
             },
         ],
     );
@@ -161,6 +176,7 @@ fn test_classify_bulk_session() {
                 duration_us: 100,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO t VALUES (2)".into(),
@@ -168,6 +184,7 @@ fn test_classify_bulk_session() {
                 duration_us: 100,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO t VALUES (3)".into(),
@@ -175,6 +192,7 @@ fn test_classify_bulk_session() {
                 duration_us: 100,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO t VALUES (4)".into(),
@@ -182,6 +200,7 @@ fn test_classify_bulk_session() {
                 duration_us: 100,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO t VALUES (5)".into(),
@@ -189,6 +208,7 @@ fn test_classify_bulk_session() {
                 duration_us: 100,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
         ],
     );
@@ -210,6 +230,7 @@ fn test_classify_mixed_session() {
                 duration_us: 1000,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             },
             Query {
                 sql: "INSERT INTO t VALUES (1)".into(),
@@ -217,6 +238,7 @@ fn test_classify_mixed_session() {
                 duration_us: 1000,
                 kind: QueryKind::Insert,
                 transaction_id: None,
+                response_values: None,
             },
         ],
     );
@@ -237,6 +259,7 @@ fn test_classify_workload_majority_vote() {
                 duration_us: 50_000,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         ),
         make_session(
@@ -247,6 +270,7 @@ fn test_classify_workload_majority_vote() {
                 duration_us: 40_000,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         ),
         make_session(
@@ -257,6 +281,7 @@ fn test_classify_workload_majority_vote() {
                 duration_us: 60_000,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         ),
         // 1 mixed session
@@ -269,6 +294,7 @@ fn test_classify_workload_majority_vote() {
                     duration_us: 500,
                     kind: QueryKind::Select,
                     transaction_id: None,
+                    response_values: None,
                 },
                 Query {
                     sql: "INSERT INTO t VALUES (1)".into(),
@@ -276,6 +302,7 @@ fn test_classify_workload_majority_vote() {
                     duration_us: 500,
                     kind: QueryKind::Insert,
                     transaction_id: None,
+                    response_values: None,
                 },
             ],
         ),

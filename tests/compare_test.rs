@@ -21,6 +21,7 @@ fn make_source_profile() -> WorkloadProfile {
                     duration_us: 100,
                     kind: QueryKind::Select,
                     transaction_id: None,
+                    response_values: None,
                 },
                 Query {
                     sql: "SELECT 2".into(),
@@ -28,6 +29,7 @@ fn make_source_profile() -> WorkloadProfile {
                     duration_us: 200,
                     kind: QueryKind::Select,
                     transaction_id: None,
+                    response_values: None,
                 },
                 Query {
                     sql: "UPDATE t SET x=1".into(),
@@ -35,6 +37,7 @@ fn make_source_profile() -> WorkloadProfile {
                     duration_us: 300,
                     kind: QueryKind::Update,
                     transaction_id: None,
+                    response_values: None,
                 },
                 Query {
                     sql: "SELECT 3".into(),
@@ -42,6 +45,7 @@ fn make_source_profile() -> WorkloadProfile {
                     duration_us: 5000,
                     kind: QueryKind::Select,
                     transaction_id: None,
+                    response_values: None,
                 },
             ],
         }],
@@ -49,6 +53,8 @@ fn make_source_profile() -> WorkloadProfile {
             total_queries: 4,
             total_sessions: 1,
             capture_duration_us: 6500,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }
@@ -193,12 +199,15 @@ fn test_evaluate_outcome_pass_no_regressions_no_errors() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         }],
         metadata: Metadata {
             total_queries: 1,
             total_sessions: 1,
             capture_duration_us: 100,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     };
     let results = vec![ReplayResults {

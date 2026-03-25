@@ -403,6 +403,7 @@ mod tests {
                         duration_us: 5000,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT * FROM users".into(),
@@ -410,6 +411,7 @@ mod tests {
                         duration_us: 10000,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT * FROM orders".into(),
@@ -417,6 +419,7 @@ mod tests {
                         duration_us: 8000,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT * FROM users".into(),
@@ -424,6 +427,7 @@ mod tests {
                         duration_us: 3000,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             }],
@@ -431,6 +435,8 @@ mod tests {
                 total_queries: 4,
                 total_sessions: 1,
                 capture_duration_us: 13000,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         };
 

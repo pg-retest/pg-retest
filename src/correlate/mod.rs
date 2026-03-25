@@ -1,3 +1,4 @@
+pub mod capture;
 pub mod sequence;
 
 use clap::ValueEnum;

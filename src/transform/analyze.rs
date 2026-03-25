@@ -575,6 +575,7 @@ mod tests {
                         duration_us: 100,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT * FROM products JOIN categories ON products.category_id = categories.id".into(),
@@ -582,6 +583,7 @@ mod tests {
                         duration_us: 200,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "INSERT INTO orders (product_id) VALUES ($1)".into(),
@@ -589,6 +591,7 @@ mod tests {
                         duration_us: 50,
                         kind: QueryKind::Insert,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             }],
@@ -596,6 +599,8 @@ mod tests {
                 total_queries: 3,
                 total_sessions: 1,
                 capture_duration_us: 350,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         };
 
@@ -637,6 +642,7 @@ mod tests {
                         duration_us: 100,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SET statement_timeout = '30s'".into(),
@@ -644,6 +650,7 @@ mod tests {
                         duration_us: 10,
                         kind: QueryKind::Other,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             }],
@@ -651,6 +658,8 @@ mod tests {
                 total_queries: 2,
                 total_sessions: 1,
                 capture_duration_us: 110,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         };
 
