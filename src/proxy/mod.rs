@@ -110,12 +110,33 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         .await
     });
 
-    // Wait for shutdown signal or duration
+    // Wait for shutdown signal or duration (signals are handled in both cases
+    // so that SIGTERM/SIGINT during a --duration wait still flushes the workload).
     match config.duration {
         Some(dur) => {
             info!("Proxy will run for {:?}", dur);
-            tokio::time::sleep(dur).await;
-            info!("Duration elapsed, shutting down...");
+            tokio::select! {
+                _ = tokio::time::sleep(dur) => {
+                    info!("Duration elapsed, shutting down...");
+                }
+                _ = async {
+                    #[cfg(unix)]
+                    {
+                        use tokio::signal::unix::{signal, SignalKind};
+                        let mut sigterm = signal(SignalKind::terminate()).unwrap();
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {},
+                            _ = sigterm.recv() => {},
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        tokio::signal::ctrl_c().await.unwrap();
+                    }
+                } => {
+                    info!("Shutdown signal received...");
+                }
+            }
         }
         None => {
             info!("Press Ctrl+C to stop and save captured workload");
@@ -513,9 +534,9 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
         }
     }
 
-    // Shutdown: if we were capturing, stop it
+    // Shutdown: if we were capturing, flush the workload to disk before exiting
     if let Some(capture_id) = active_capture_id.take() {
-        info!("Stopping active capture {capture_id} during shutdown...");
+        info!("Flushing active capture {capture_id} during shutdown...");
         no_capture.store(true, Ordering::Relaxed);
         {
             let mut guard = active_staging_tx.lock().await;
@@ -523,6 +544,33 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
         }
         if let Some(handle) = active_collector.take() {
             let _ = handle.await;
+        }
+
+        // Read staged data and build profile
+        match staging_db.read_capture(&capture_id).await {
+            Ok(rows) => {
+                let profile =
+                    build_profile_from_staging(rows, &config.target_addr, config.mask_values);
+                info!(
+                    "Captured {} queries across {} sessions",
+                    profile.metadata.total_queries, profile.metadata.total_sessions
+                );
+
+                let output_path = config.output.clone().unwrap_or_else(|| {
+                    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                    PathBuf::from(format!("capture-{ts}.wkl"))
+                });
+
+                match io::write_profile(&output_path, &profile) {
+                    Ok(()) => info!("Wrote workload profile to {}", output_path.display()),
+                    Err(e) => warn!("Failed to write profile during shutdown: {e}"),
+                }
+
+                let _ = staging_db.clear_capture(&capture_id).await;
+            }
+            Err(e) => {
+                warn!("Failed to read staging data during shutdown: {e}");
+            }
         }
     }
 
@@ -829,9 +877,9 @@ async fn run_proxy_managed_multi(
         }
     }
 
-    // Shutdown: if we were capturing, stop it
+    // Shutdown: if we were capturing, flush the workload to disk before exiting
     if let Some(capture_id) = active_capture_id.take() {
-        info!("Stopping active capture {capture_id} during shutdown...");
+        info!("Flushing active capture {capture_id} during shutdown...");
         no_capture.store(true, Ordering::Relaxed);
         {
             let mut guard = active_staging_tx.lock().await;
@@ -839,6 +887,33 @@ async fn run_proxy_managed_multi(
         }
         if let Some(handle) = active_collector.take() {
             let _ = handle.await;
+        }
+
+        // Read staged data and build profile
+        match staging_db.read_capture(&capture_id).await {
+            Ok(rows) => {
+                let profile =
+                    build_profile_from_staging(rows, &config.target_addr, config.mask_values);
+                info!(
+                    "Captured {} queries across {} sessions",
+                    profile.metadata.total_queries, profile.metadata.total_sessions
+                );
+
+                let output_path = config.output.clone().unwrap_or_else(|| {
+                    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                    PathBuf::from(format!("capture-{ts}.wkl"))
+                });
+
+                match io::write_profile(&output_path, &profile) {
+                    Ok(()) => info!("Wrote workload profile to {}", output_path.display()),
+                    Err(e) => warn!("Failed to write profile during shutdown: {e}"),
+                }
+
+                let _ = staging_db.clear_capture(&capture_id).await;
+            }
+            Err(e) => {
+                warn!("Failed to read staging data during shutdown: {e}");
+            }
         }
     }
 
