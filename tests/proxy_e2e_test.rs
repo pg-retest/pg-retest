@@ -75,6 +75,7 @@ async fn start_proxy(
         enable_correlation: false,
         id_capture_implicit: false,
         pk_map: None,
+        no_stealth: false,
     };
 
     let cancel_token = CancellationToken::new();
@@ -397,6 +398,7 @@ async fn test_proxy_no_capture_mode() {
         enable_correlation: false,
         id_capture_implicit: false,
         pk_map: None,
+        no_stealth: false,
     };
 
     let cancel_token = CancellationToken::new();
@@ -476,6 +478,7 @@ async fn test_proxy_duration_shutdown() {
         enable_correlation: false,
         id_capture_implicit: false,
         pk_map: None,
+        no_stealth: false,
     };
 
     let cancel_token = CancellationToken::new();
