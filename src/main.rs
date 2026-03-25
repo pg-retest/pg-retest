@@ -488,6 +488,41 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         None
     };
 
+    // Create a restore point on the source database for PITR recovery
+    if let Some(ref source_db) = args.source_db {
+        let rt_tmp = tokio::runtime::Runtime::new()?;
+        let restore_point_name = format!(
+            "pg_retest_capture_{}",
+            chrono::Utc::now().format("%Y%m%d_%H%M%S")
+        );
+        match rt_tmp.block_on(async {
+            use tokio_postgres::NoTls;
+            let (client, connection) = tokio_postgres::connect(source_db, NoTls).await?;
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            client
+                .simple_query(&format!(
+                    "SELECT pg_create_restore_point('{}')",
+                    restore_point_name
+                ))
+                .await
+        }) {
+            Ok(_) => {
+                info!(
+                    "Created restore point '{}' — use this for PITR recovery before replay",
+                    restore_point_name
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Could not create restore point: {e}. This requires superuser or \
+                     pg_create_restore_point privilege. Capture continues without restore point."
+                );
+            }
+        }
+    }
+
     let config = ProxyConfig {
         listen_addr: args.listen,
         target_addr: args.target,
