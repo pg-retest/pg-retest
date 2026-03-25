@@ -475,6 +475,19 @@ async fn relay_server_to_client(
                 }
                 b'C' => {
                     // CommandComplete — query finished.
+                    // IMPORTANT: QueryComplete must be sent BEFORE QueryReturning,
+                    // because the collector moves pending_sql into queries on
+                    // QueryComplete, and QueryReturning attaches to the last
+                    // query in the queries vec.
+                    let event = CaptureEvent::QueryComplete {
+                        session_id,
+                        timestamp: Instant::now(),
+                    };
+                    if let Some(ref mtx) = metrics_tx {
+                        let _ = mtx.send(event.clone());
+                    }
+                    let _ = capture_tx.send(event);
+
                     // If correlation is active, pop the queue and emit QueryReturning if needed.
                     if let Some(ref cs) = correlate {
                         let was_returning =
@@ -489,6 +502,11 @@ async fn relay_server_to_client(
                                 std::mem::take(&mut *pending)
                             };
                             if !rows.is_empty() {
+                                debug!(
+                                    "Session {session_id}: emitting QueryReturning with {} columns, {} rows",
+                                    columns.len(),
+                                    rows.len()
+                                );
                                 let event = CaptureEvent::QueryReturning {
                                     session_id,
                                     columns,
@@ -502,15 +520,6 @@ async fn relay_server_to_client(
                             }
                         }
                     }
-
-                    let event = CaptureEvent::QueryComplete {
-                        session_id,
-                        timestamp: Instant::now(),
-                    };
-                    if let Some(ref mtx) = metrics_tx {
-                        let _ = mtx.send(event.clone());
-                    }
-                    let _ = capture_tx.send(event);
                 }
                 b'E' => {
                     // ErrorResponse
