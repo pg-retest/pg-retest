@@ -13,6 +13,7 @@ fn mock_variant_results(label: &str, latencies: &[u64]) -> VariantResult {
                 replay_duration_us: lat,
                 success: true,
                 error: None,
+                id_substitution_count: 0,
             })
             .collect(),
     }];

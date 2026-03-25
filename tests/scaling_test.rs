@@ -190,6 +190,7 @@ fn test_scale_report_computation() {
                     replay_duration_us: 80,
                     success: true,
                     error: None,
+                    id_substitution_count: 0,
                 },
                 QueryResult {
                     sql: "SELECT 2".into(),
@@ -197,6 +198,7 @@ fn test_scale_report_computation() {
                     replay_duration_us: 150,
                     success: true,
                     error: None,
+                    id_substitution_count: 0,
                 },
             ],
         },
@@ -208,6 +210,7 @@ fn test_scale_report_computation() {
                 replay_duration_us: 400,
                 success: false,
                 error: Some("timeout".into()),
+                id_substitution_count: 0,
             }],
         },
     ];

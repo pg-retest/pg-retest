@@ -93,9 +93,17 @@ async fn test_replay_session_basic_selects() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
-        .await
-        .expect("replay_session should succeed");
+    let results = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start,
+        None,
+        None,
+    )
+    .await
+    .expect("replay_session should succeed");
 
     assert_eq!(results.session_id, 1);
     assert_eq!(results.query_results.len(), 3);
@@ -158,9 +166,17 @@ async fn test_replay_session_dml_execution() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
-        .await
-        .expect("DML replay should succeed");
+    let results = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start,
+        None,
+        None,
+    )
+    .await
+    .expect("DML replay should succeed");
 
     assert_eq!(results.query_results.len(), 5);
     for qr in &results.query_results {
@@ -215,9 +231,17 @@ async fn test_replay_session_transaction_commit() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
-        .await
-        .expect("Transaction replay should succeed");
+    let results = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start,
+        None,
+        None,
+    )
+    .await
+    .expect("Transaction replay should succeed");
 
     assert_eq!(results.query_results.len(), 6);
     for qr in &results.query_results {
@@ -264,9 +288,17 @@ async fn test_replay_session_failed_transaction_auto_rollback() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
-        .await
-        .expect("Replay should complete (with errors)");
+    let results = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start,
+        None,
+        None,
+    )
+    .await
+    .expect("Replay should complete (with errors)");
 
     assert_eq!(results.query_results.len(), 5);
 
@@ -372,9 +404,17 @@ async fn test_run_replay_parallel_sessions() {
         },
     ]);
 
-    let results = run_replay(&profile, CONN_STR, ReplayMode::ReadWrite, 0.0, None, None)
-        .await
-        .expect("Parallel replay should succeed");
+    let results = run_replay(
+        &profile,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        None,
+        None,
+        pg_retest::correlate::IdMode::None,
+    )
+    .await
+    .expect("Parallel replay should succeed");
 
     // All 3 sessions should produce results
     assert_eq!(results.len(), 3, "Should have results for all 3 sessions");
@@ -434,9 +474,17 @@ async fn test_replay_read_only_mode_skips_dml() {
         ],
     }]);
 
-    let results = run_replay(&profile, CONN_STR, ReplayMode::ReadOnly, 0.0, None, None)
-        .await
-        .expect("Read-only replay should succeed");
+    let results = run_replay(
+        &profile,
+        CONN_STR,
+        ReplayMode::ReadOnly,
+        0.0,
+        None,
+        None,
+        pg_retest::correlate::IdMode::None,
+    )
+    .await
+    .expect("Read-only replay should succeed");
 
     assert_eq!(results.len(), 1);
     // Only SELECTs should have been replayed
@@ -505,6 +553,7 @@ async fn test_replay_speed_multiplier() {
         0.0,
         start_tok,
         None,
+        None,
     )
     .await
     .expect("Fast replay should succeed");
@@ -519,6 +568,7 @@ async fn test_replay_speed_multiplier() {
         ReplayMode::ReadWrite,
         1.0,
         start_tok2,
+        None,
         None,
     )
     .await
@@ -560,6 +610,7 @@ async fn test_replay_session_bad_connection_string() {
         0.0,
         start,
         None,
+        None,
     )
     .await;
 
@@ -592,9 +643,17 @@ async fn test_replay_session_query_error_continues() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
-        .await
-        .expect("Replay should complete despite query errors");
+    let results = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start,
+        None,
+        None,
+    )
+    .await
+    .expect("Replay should complete despite query errors");
 
     assert_eq!(results.query_results.len(), 3);
     assert!(results.query_results[0].success, "SELECT 1 should succeed");
@@ -647,9 +706,17 @@ async fn test_replay_session_multiple_transactions() {
     };
 
     let start = TokioInstant::now();
-    let results = replay_session(&session, CONN_STR, ReplayMode::ReadWrite, 0.0, start, None)
-        .await
-        .expect("Multi-transaction replay should complete");
+    let results = replay_session(
+        &session,
+        CONN_STR,
+        ReplayMode::ReadWrite,
+        0.0,
+        start,
+        None,
+        None,
+    )
+    .await
+    .expect("Multi-transaction replay should complete");
 
     assert_eq!(results.query_results.len(), 10);
 

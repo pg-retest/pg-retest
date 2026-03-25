@@ -33,4 +33,6 @@ pub struct QueryResult {
     pub replay_duration_us: u64,
     pub success: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub id_substitution_count: usize,
 }

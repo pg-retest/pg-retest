@@ -82,6 +82,7 @@ pub async fn run_tuning_with_events(
         config.speed,
         None,
         config.tls.clone(),
+        crate::correlate::IdMode::None,
     )
     .await?;
 
@@ -206,6 +207,7 @@ pub async fn run_tuning_with_events(
             config.speed,
             None,
             config.tls.clone(),
+            crate::correlate::IdMode::None,
         )
         .await?;
 

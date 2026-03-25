@@ -18,6 +18,7 @@ pub async fn replay_session(
     speed: f64,
     replay_start: TokioInstant,
     tls: Option<MakeRustlsConnect>,
+    id_map: Option<crate::correlate::map::IdMap>,
 ) -> Result<ReplayResults> {
     let client = if let Some(tls_connector) = tls {
         let (client, connection) =
@@ -58,6 +59,7 @@ pub async fn replay_session(
                         replay_duration_us: 0,
                         success: false,
                         error: Some("skipped: transaction already rolled back".into()),
+                        id_substitution_count: 0,
                     });
                 } else {
                     // Skip remaining queries in failed transaction
@@ -67,6 +69,7 @@ pub async fn replay_session(
                         replay_duration_us: 0,
                         success: false,
                         error: Some("skipped: transaction failed".into()),
+                        id_substitution_count: 0,
                     });
                 }
                 continue;
@@ -83,9 +86,40 @@ pub async fn replay_session(
             sleep_until(replay_start + target_offset).await;
         }
 
+        // ID substitution
+        let (effective_sql, sub_count) = match &id_map {
+            Some(map) => {
+                let (sql, count) = map.substitute(&query.sql);
+                (sql.into_owned(), count)
+            }
+            None => (query.sql.clone(), 0),
+        };
+
         let start = Instant::now();
-        let result = client.simple_query(&query.sql).await;
+        let result = client.simple_query(&effective_sql).await;
         let elapsed_us = start.elapsed().as_micros() as u64;
+
+        // Register RETURNING value mappings
+        if let (Ok(ref messages), Some(ref map), Some(ref captured_rows)) =
+            (&result, &id_map, &query.response_values)
+        {
+            use tokio_postgres::SimpleQueryMessage;
+            let mut captured_iter = captured_rows.iter();
+            for msg in messages {
+                if let SimpleQueryMessage::Row(row) = msg {
+                    if let Some(captured) = captured_iter.next() {
+                        for (idx, (_, captured_val)) in captured.columns.iter().enumerate() {
+                            if let Ok(Some(replay_val)) = row.try_get(idx) {
+                                let replay_val: &str = replay_val;
+                                if replay_val != captured_val {
+                                    map.register(captured_val.clone(), replay_val.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let (success, error) = match result {
             Ok(_) => (true, None),
@@ -109,11 +143,12 @@ pub async fn replay_session(
         };
 
         query_results.push(QueryResult {
-            sql: query.sql.clone(),
+            sql: effective_sql,
             original_duration_us: query.duration_us,
             replay_duration_us: elapsed_us,
             success,
             error,
+            id_substitution_count: sub_count,
         });
     }
 
@@ -130,10 +165,17 @@ pub async fn run_replay(
     speed: f64,
     max_connections: Option<u32>,
     tls: Option<MakeRustlsConnect>,
+    id_mode: crate::correlate::IdMode,
 ) -> Result<Vec<ReplayResults>> {
     let replay_start = TokioInstant::now();
     let mut handles = Vec::new();
     let session_count = profile.sessions.len();
+
+    let id_map = if id_mode.needs_correlation() {
+        Some(crate::correlate::map::IdMap::new())
+    } else {
+        None
+    };
 
     let semaphore = max_connections.map(|n| Arc::new(Semaphore::new(n as usize)));
 
@@ -151,13 +193,23 @@ pub async fn run_replay(
         let conn_str = connection_string.to_string();
         let sem = semaphore.clone();
         let tls_clone = tls.clone();
+        let id_map_clone = id_map.clone();
 
         let handle = tokio::spawn(async move {
             let _permit = match sem {
                 Some(ref s) => Some(s.acquire().await.unwrap()),
                 None => None,
             };
-            replay_session(&session, &conn_str, mode, speed, replay_start, tls_clone).await
+            replay_session(
+                &session,
+                &conn_str,
+                mode,
+                speed,
+                replay_start,
+                tls_clone,
+                id_map_clone,
+            )
+            .await
         });
 
         handles.push(handle);
