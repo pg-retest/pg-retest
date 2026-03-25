@@ -22,6 +22,7 @@ fn sample_profile() -> WorkloadProfile {
                         duration_us: 500,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT p.name, c.label FROM products p JOIN categories c ON p.category_id = c.id WHERE p.id = $1".into(),
@@ -29,6 +30,7 @@ fn sample_profile() -> WorkloadProfile {
                         duration_us: 200,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "INSERT INTO orders (product_id, qty) VALUES ($1, $2)".into(),
@@ -36,6 +38,7 @@ fn sample_profile() -> WorkloadProfile {
                         duration_us: 300,
                         kind: QueryKind::Insert,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT * FROM products WHERE category_id = $1".into(),
@@ -43,6 +46,7 @@ fn sample_profile() -> WorkloadProfile {
                         duration_us: 800,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             },
@@ -57,6 +61,7 @@ fn sample_profile() -> WorkloadProfile {
                         duration_us: 1200,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT count(*) FROM orders WHERE status = 'pending'".into(),
@@ -64,6 +69,7 @@ fn sample_profile() -> WorkloadProfile {
                         duration_us: 400,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             },
@@ -72,6 +78,8 @@ fn sample_profile() -> WorkloadProfile {
             total_queries: 6,
             total_sessions: 2,
             capture_duration_us: 3800,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }

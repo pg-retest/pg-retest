@@ -179,6 +179,7 @@ pub(crate) fn build_profile(
                     start_offset_us: cq.start_offset_us,
                     duration_us: cq.duration_us,
                     transaction_id: None,
+                    response_values: None,
                 }
             })
             .collect();
@@ -217,6 +218,8 @@ pub(crate) fn build_profile(
             total_queries,
             total_sessions,
             capture_duration_us,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }
@@ -404,6 +407,7 @@ pub(crate) fn build_profile_from_staging(
                     start_offset_us: sr.start_offset_us as u64,
                     duration_us: sr.duration_us as u64,
                     transaction_id: None,
+                    response_values: None,
                 }
             })
             .collect();
@@ -440,6 +444,8 @@ pub(crate) fn build_profile_from_staging(
             total_queries,
             total_sessions,
             capture_duration_us,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     }
 }

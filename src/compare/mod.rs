@@ -190,6 +190,7 @@ mod tests {
                         duration_us: 100,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "INSERT INTO t VALUES (1)".into(),
@@ -197,6 +198,7 @@ mod tests {
                         duration_us: 9000,
                         kind: QueryKind::Insert,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT 2".into(),
@@ -204,6 +206,7 @@ mod tests {
                         duration_us: 200,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "UPDATE t SET x=1".into(),
@@ -211,6 +214,7 @@ mod tests {
                         duration_us: 8000,
                         kind: QueryKind::Update,
                         transaction_id: None,
+                        response_values: None,
                     },
                     Query {
                         sql: "SELECT 3".into(),
@@ -218,6 +222,7 @@ mod tests {
                         duration_us: 300,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     },
                 ],
             }],
@@ -225,6 +230,8 @@ mod tests {
                 total_queries: 5,
                 total_sessions: 1,
                 capture_duration_us: 1000,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         };
 

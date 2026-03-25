@@ -3,6 +3,9 @@ pub mod io;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::correlate::capture::{ResponseRow, TablePk};
+use crate::correlate::sequence::SequenceState;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkloadProfile {
     pub version: u8,
@@ -30,6 +33,8 @@ pub struct Query {
     pub kind: QueryKind,
     #[serde(default)]
     pub transaction_id: Option<u64>,
+    #[serde(default)]
+    pub response_values: Option<Vec<ResponseRow>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +98,10 @@ pub struct Metadata {
     pub total_queries: u64,
     pub total_sessions: u64,
     pub capture_duration_us: u64,
+    #[serde(default)]
+    pub sequence_snapshot: Option<Vec<SequenceState>>,
+    #[serde(default)]
+    pub pk_map: Option<Vec<TablePk>>,
 }
 
 /// Assign transaction IDs to queries within BEGIN/COMMIT|ROLLBACK blocks.

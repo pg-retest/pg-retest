@@ -45,6 +45,8 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
             total_queries,
             total_sessions: sessions.len() as u64,
             capture_duration_us: 0,
+            sequence_snapshot: None,
+            pk_map: None,
         },
         sessions,
     }
@@ -57,6 +59,7 @@ fn make_query(sql: &str, offset_us: u64, kind: QueryKind, txn_id: Option<u64>) -
         duration_us: 100,
         kind,
         transaction_id: txn_id,
+        response_values: None,
     }
 }
 

@@ -100,12 +100,15 @@ fn test_pipeline_threshold_evaluation() {
                 duration_us: 100,
                 kind: QueryKind::Select,
                 transaction_id: None,
+                response_values: None,
             }],
         }],
         metadata: Metadata {
             total_queries: 1,
             total_sessions: 1,
             capture_duration_us: 100,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     };
 

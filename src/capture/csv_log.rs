@@ -158,6 +158,7 @@ impl CsvLogCapture {
                         duration_us: e.duration_us,
                         kind: QueryKind::from_sql(&e.sql),
                         transaction_id: None,
+                        response_values: None,
                     }
                 })
                 .collect();
@@ -194,6 +195,8 @@ impl CsvLogCapture {
                 total_queries,
                 total_sessions: session_counter,
                 capture_duration_us,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         })
     }

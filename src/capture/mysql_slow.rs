@@ -229,6 +229,7 @@ impl MysqlSlowLogCapture {
                     duration_us: entry.query_time_us,
                     kind: QueryKind::from_sql(&sql),
                     transaction_id: None,
+                    response_values: None,
                 });
             }
 
@@ -271,6 +272,8 @@ impl MysqlSlowLogCapture {
                 total_queries,
                 total_sessions,
                 capture_duration_us,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         })
     }

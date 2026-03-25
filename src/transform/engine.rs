@@ -129,6 +129,7 @@ pub fn apply_transform(
                             duration_us: rule.estimated_duration_us,
                             kind: QueryKind::from_sql(&rule.sql),
                             transaction_id: None,
+                            response_values: None,
                         });
                     }
                 }
@@ -209,6 +210,7 @@ pub fn apply_transform(
                     duration_us: q.duration_us,
                     kind: q.kind,
                     transaction_id: None,
+                    response_values: None,
                 })
                 .collect();
 
@@ -254,6 +256,7 @@ pub fn apply_transform(
                             duration_us: iq.duration_us,
                             kind: QueryKind::from_sql(&iq.sql),
                             transaction_id: None,
+                            response_values: None,
                         }
                     })
                     .collect();
@@ -295,6 +298,8 @@ pub fn apply_transform(
             total_queries,
             total_sessions,
             capture_duration_us,
+            sequence_snapshot: None,
+            pk_map: None,
         },
     })
 }
@@ -324,6 +329,7 @@ mod tests {
                             duration_us: 100,
                             kind: QueryKind::Select,
                             transaction_id: None,
+                            response_values: None,
                         },
                         Query {
                             sql: "SELECT * FROM categories".into(),
@@ -331,6 +337,7 @@ mod tests {
                             duration_us: 50,
                             kind: QueryKind::Select,
                             transaction_id: None,
+                            response_values: None,
                         },
                         Query {
                             sql: "INSERT INTO orders (product_id) VALUES ($1)".into(),
@@ -338,6 +345,7 @@ mod tests {
                             duration_us: 80,
                             kind: QueryKind::Insert,
                             transaction_id: None,
+                            response_values: None,
                         },
                     ],
                 },
@@ -351,6 +359,7 @@ mod tests {
                         duration_us: 150,
                         kind: QueryKind::Select,
                         transaction_id: None,
+                        response_values: None,
                     }],
                 },
             ],
@@ -358,6 +367,8 @@ mod tests {
                 total_queries: 4,
                 total_sessions: 2,
                 capture_duration_us: 480,
+                sequence_snapshot: None,
+                pk_map: None,
             },
         }
     }
