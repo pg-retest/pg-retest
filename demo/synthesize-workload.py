@@ -86,6 +86,10 @@ class WorkloadFingerprint:
     # Per-session kind distribution (list of dicts)
     session_kind_distributions: List[Dict[str, int]] = field(default_factory=list)
 
+    # Query templates — actual SQL patterns from captured workload with placeholders
+    # Each entry: (template_str, count, kind, tables, original_sql_sample)
+    query_templates: List[dict] = field(default_factory=list)
+
     # Capture source info
     source_host: str = ""
     capture_method: str = ""
@@ -104,6 +108,7 @@ class TableInfo:
     fk_refs: List[Tuple[str, str]] = field(default_factory=list)  # (col_name, referenced_table)
     max_id: int = 0
     row_count: int = 0
+    is_uuid_pk: bool = False
     # Sample values per column for realistic generation
     sample_values: Dict[str, list] = field(default_factory=dict)
 
@@ -163,10 +168,19 @@ class SchemaAnalyzer:
             info.fk_refs = [(r[0], r[1]) for r in cur.fetchall()]
 
             # Max ID + row count
-            cur.execute(f'SELECT COALESCE(MAX({info.pk_col}), 0), COUNT(*) FROM "{tbl}"')
-            row = cur.fetchone()
-            info.max_id = row[0] or 0
-            info.row_count = row[1] or 0
+            # Get max ID and row count — handle UUID PKs gracefully
+            pk_type = next((ct for cn, ct in info.columns if cn == info.pk_col), "int4")
+            if pk_type == "uuid":
+                cur.execute(f'SELECT COUNT(*) FROM "{tbl}"')
+                info.row_count = cur.fetchone()[0] or 0
+                info.max_id = 0  # UUID doesn't have a numeric max
+                info.is_uuid_pk = True
+            else:
+                cur.execute(f'SELECT COALESCE(MAX({info.pk_col}), 0), COUNT(*) FROM "{tbl}"')
+                row = cur.fetchone()
+                info.max_id = row[0] or 0
+                info.row_count = row[1] or 0
+                info.is_uuid_pk = False
 
             # Sample values for non-PK, non-FK text/numeric columns
             for col_name, col_type in info.columns:
@@ -340,6 +354,42 @@ def fingerprint_workload(wkl_path: str) -> Tuple[WorkloadFingerprint, dict]:
         fp.pct_in_transaction = txn_queries / total_dml_select
     if txn_sizes:
         fp.avg_txn_size = sum(txn_sizes) / len(txn_sizes)
+
+    # Extract query templates — normalized SQL patterns preserving JOINs, ORDER BY, etc.
+    template_counter = defaultdict(lambda: {"count": 0, "kind": "", "tables": [], "sample": ""})
+    for sess in profile["sessions"]:
+        for q in sess["queries"]:
+            kind = q["kind"]
+            if kind in ("Begin", "Commit", "Rollback"):
+                continue
+            sql = q["sql"]
+            # Normalize: replace numeric literals with {NUM}
+            tmpl = re.sub(r"(?<![a-zA-Z_])\d+(?:\.\d+)?(?![a-zA-Z_])", "{NUM}", sql)
+            # Normalize: replace string literals with {STR}
+            tmpl = re.sub(r"'[^']*'", "{STR}", tmpl)
+            key = tmpl
+            entry = template_counter[key]
+            entry["count"] += 1
+            entry["kind"] = kind
+            entry["tables"] = _extract_tables(sql)
+            if not entry["sample"]:
+                entry["sample"] = sql  # keep one real example
+
+    # Sort by frequency and store
+    fp.query_templates = sorted(
+        [
+            {
+                "template": k,
+                "count": v["count"],
+                "kind": v["kind"],
+                "tables": v["tables"],
+                "sample": v["sample"],
+                "weight": v["count"] / total_dml_select if total_dml_select > 0 else 0,
+            }
+            for k, v in template_counter.items()
+        ],
+        key=lambda x: -x["count"],
+    )
 
     return fp, profile
 
@@ -523,8 +573,95 @@ class WorkloadSynthesizer:
 
         return f"'synth_{row_idx}'"
 
+    def generate_from_template(self, template: dict, session_id: int) -> str:
+        """Generate a query by filling in a captured template with realistic values.
+
+        Uses the actual SQL structure (JOINs, ORDER BY, GROUP BY, etc.) from
+        the captured workload, replacing only the placeholder values.
+        """
+        tmpl = template["template"]
+        tables = template["tables"]
+        kind = template["kind"]
+
+        # For each {NUM} placeholder, substitute a realistic value
+        def replace_num(match):
+            # Try to determine context: is this an ID reference or a general number?
+            # Look at what's before the placeholder
+            start = match.start()
+            prefix = tmpl[:start].lower()
+
+            # If it follows a FK column pattern (customer_id =, order_id =, etc.)
+            for tbl in tables:
+                info = self.schema.get(tbl)
+                if info:
+                    for fk_col, fk_table in info.fk_refs:
+                        if prefix.rstrip().endswith(fk_col + " =") or prefix.rstrip().endswith(fk_col + " in"):
+                            return str(self.pick_fk_id(fk_table))
+                    # If it follows the PK column
+                    if prefix.rstrip().endswith(info.pk_col + " ="):
+                        return str(self.pick_known_id(tbl))
+
+            # If it's after VALUES ( — this is an INSERT value
+            if "values" in prefix[-30:].lower() and kind == "Insert":
+                # First numeric in VALUES is often the PK or FK
+                # Count how many {NUM} we've already passed in this VALUES clause
+                vals_pos = prefix.rfind("values")
+                if vals_pos >= 0:
+                    in_vals = prefix[vals_pos:]
+                    nums_before = in_vals.count("{NUM}") + in_vals.count("{STR}")
+                    # Try to match to column position
+                    main_table = tables[0] if tables else None
+                    if main_table:
+                        info = self.schema.get(main_table)
+                        if info and nums_before < len(info.columns):
+                            col_name = info.columns[nums_before][0]
+                            if col_name == info.pk_col:
+                                return str(self.next_id(main_table))
+                            for fk_col, fk_table in info.fk_refs:
+                                if fk_col == col_name:
+                                    return str(self.pick_fk_id(fk_table))
+
+            # Default: random number in reasonable range
+            return str(self.rng.randint(1, 10000))
+
+        def replace_str(match):
+            # Generate a realistic string value
+            prefix = tmpl[:match.start()].lower()
+
+            # Common patterns
+            if "email" in prefix[-20:]:
+                return f"'synth_{self.rng.randint(1,99999)}@test.com'"
+            if "name" in prefix[-20:]:
+                names = ["Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Hank"]
+                return f"'Synth_{self.rng.choice(names)}_{self.rng.randint(1,9999)}'"
+            if "status" in prefix[-20:]:
+                return f"'{self.rng.choice(['pending', 'shipped', 'delivered', 'cancelled'])}'"
+            if "event_type" in prefix[-30:]:
+                return f"'{self.rng.choice(['created', 'paid', 'shipped', 'delivered', 'returned'])}'"
+            if "channel" in prefix[-20:]:
+                return f"'{self.rng.choice(['email', 'sms', 'push'])}'"
+            if "table_name" in prefix[-30:]:
+                return f"'{self.rng.choice(['customers', 'orders', 'products'])}'"
+            if "operation" in prefix[-30:]:
+                return f"'{self.rng.choice(['INSERT', 'UPDATE', 'DELETE'])}'"
+            if "payload" in prefix[-20:] or "json" in prefix[-20:]:
+                return f"'{{\"synth\": true, \"id\": {self.rng.randint(1,9999)}}}'"
+            if "subject" in prefix[-20:]:
+                return f"'Synth notification {self.rng.randint(1,9999)}'"
+            if "body" in prefix[-20:]:
+                return f"'Synthetic test body {self.rng.randint(1,9999)}'"
+
+            # Default
+            return f"'synth_{self.rng.randint(1,99999)}'"
+
+        # Apply replacements
+        result = re.sub(r"\{NUM\}", replace_num, tmpl)
+        result = re.sub(r"\{STR\}", replace_str, result)
+
+        return result
+
     def generate_insert(self, table: str, session_id: int) -> str:
-        """Generate an INSERT with fixed ID."""
+        """Generate an INSERT with fixed ID — fallback when no template matches."""
         info = self.schema.get(table)
         if not info:
             row_id = self.next_id(table)
@@ -557,14 +694,14 @@ class WorkloadSynthesizer:
         return f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(vals)})"
 
     def generate_select(self, table: str) -> str:
-        """Generate a SELECT referencing a known ID."""
+        """Generate a SELECT — fallback when no template matches."""
         info = self.schema.get(table)
         pk = info.pk_col if info else "id"
         known_id = self.pick_known_id(table)
         return f"SELECT * FROM {table} WHERE {pk} = {known_id} LIMIT 10"
 
     def generate_update(self, table: str) -> str:
-        """Generate an UPDATE on a known row."""
+        """Generate an UPDATE — fallback when no template matches."""
         info = self.schema.get(table)
         pk = info.pk_col if info else "id"
         known_id = self.pick_known_id(table)
@@ -623,16 +760,31 @@ class WorkloadSynthesizer:
                 txn_counter += 1
                 txn_id = txn_counter
 
-            # Generate the actual query
-            table = self.pick_table(op)
-            if op == "insert":
-                sql = self.generate_insert(table, session_id)
-            elif op == "select":
-                sql = self.generate_select(table)
-            elif op == "update":
-                sql = self.generate_update(table)
+            # Generate the actual query — prefer templates from captured workload
+            kind_str = self._kind_str(op)
+            matching_templates = [
+                t for t in self.fp.query_templates
+                if t["kind"] == kind_str.capitalize() or t["kind"] == kind_str
+            ]
+
+            if matching_templates:
+                # Weighted random selection from matching templates
+                weights = [t["weight"] for t in matching_templates]
+                total_w = sum(weights) or 1
+                weights = [w / total_w for w in weights]
+                template = self.rng.choices(matching_templates, weights=weights, k=1)[0]
+                sql = self.generate_from_template(template, session_id)
             else:
-                sql = self.generate_delete(table)
+                # Fallback to simple generation
+                table = self.pick_table(op)
+                if op == "insert":
+                    sql = self.generate_insert(table, session_id)
+                elif op == "select":
+                    sql = self.generate_select(table)
+                elif op == "update":
+                    sql = self.generate_update(table)
+                else:
+                    sql = self.generate_delete(table)
 
             dur = self.sample_duration()
             queries.append(self._make_query(sql, offset_us, dur,
