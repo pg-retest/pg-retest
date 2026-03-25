@@ -256,6 +256,36 @@ Latency comparisons in read-only mode are valid for the query execution engine b
 
 - **Sequences in `pg_catalog` and `information_schema` are excluded.** Only user-defined sequences are captured.
 
+### Implicit Capture Risks (`--id-capture-implicit`)
+
+**`--id-capture-implicit` modifies queries sent to the database.** When enabled, the proxy appends `RETURNING <pk_columns>` to bare INSERT statements. This changes what the PostgreSQL server sends back to the client -- the client application receives DataRow messages it was not expecting. While most PostgreSQL client libraries handle this gracefully (they read all messages until `ReadyForQuery` and discard unexpected rows), some drivers and ORMs may not.
+
+**This flag is off by default for exactly this reason.** Only enable it when you understand the risk.
+
+#### Driver/ORM Compatibility
+
+| Driver/ORM | Simple Query Mode | Extended Query Mode | Risk Level | Notes |
+|---|---|---|---|---|
+| **psql** (CLI) | Safe | N/A | None | Displays extra result set rows; no breakage |
+| **libpq** (C library) | Safe | Caution | Low | `PQexec()` handles extra result sets via `PQgetResult()` loop. `PQexecParams()` may not expect DataRows from a non-SELECT. |
+| **psycopg2** (Python) | Safe | Safe | None | Handles unexpected result sets gracefully in both modes |
+| **psycopg3** (Python) | Safe | Caution | Low | Pipeline mode may be affected if it doesn't expect DataRows from INSERT |
+| **asyncpg** (Python) | N/A | Caution | Medium | Uses extended query protocol exclusively. May raise `unexpected message type` if it doesn't expect DataRows from a prepared INSERT. Test before use. |
+| **tokio-postgres** (Rust) | Safe | Safe | None | `simple_query()` returns `Vec<SimpleQueryMessage>` which handles mixed Row/CommandComplete. `query()` (extended) expects rows. |
+| **node-postgres (pg)** (Node.js) | Safe | Safe | Low | Returns `rows` array from all queries; extra RETURNING rows appear in `result.rows` |
+| **JDBC** (Java) | Caution | Caution | Medium | `Statement.executeUpdate()` returns an int (row count), not a ResultSet. Auto-injected RETURNING produces a ResultSet where an int was expected. May throw `PSQLException: A result was returned when none was expected.` |
+| **Hibernate/JPA** (Java) | N/A | Caution | Medium | Uses JDBC underneath. Batch inserts may break if the driver doesn't handle unexpected result sets. |
+| **Go pgx** | Safe | Caution | Low | `Exec()` discards result rows. `Query()` / `QueryRow()` handle them. Extended protocol with `Prepare` may not expect DataRows. |
+| **Go database/sql + lib/pq** | Caution | Caution | Medium | `Exec()` calls may break if driver tries to parse unexpected DataRows as an error |
+| **Rails ActiveRecord** (Ruby) | Safe | Safe | Low | Uses `pg` gem which handles extra result sets |
+| **Django** (Python) | Safe | Safe | None | Uses psycopg2/psycopg3 underneath |
+| **SQLAlchemy** (Python) | Safe | Safe | None | Uses psycopg2/psycopg3 underneath |
+| **Entity Framework** (C#/Npgsql) | N/A | Caution | Medium | Npgsql uses extended query protocol. `ExecuteNonQuery()` may not expect DataRows from a bare INSERT with auto-injected RETURNING. |
+
+**General rule:** If your application uses `simple_query` mode (sending raw SQL strings), auto-inject is generally safe. If your application uses the extended query protocol with prepared statements and explicitly typed parameters, test first.
+
+**Recommendation:** For applications using JDBC, asyncpg, Go lib/pq, or Entity Framework, prefer `--id-mode=correlate` WITHOUT `--id-capture-implicit` and ensure your application uses explicit `RETURNING` clauses. Alternatively, use `--id-mode=sequence` which does not modify any queries.
+
 ### Correlate Mode Limitations
 
 - **Proxy-captured workloads only.** Log-based capture (`--source-log`) does not see server responses. `--id-mode=correlate` on a log-captured workload emits an error.
