@@ -25,6 +25,7 @@ use self::capture::{
 use self::control::{build_control_router, CaptureCommand, ControlState};
 use self::pool::SessionPool;
 use self::staging::StagingDb;
+use crate::correlate::sequence::SequenceState;
 use crate::profile::io;
 use crate::profile::WorkloadProfile;
 
@@ -46,6 +47,8 @@ pub struct ProxyConfig {
     pub max_capture_bytes: u64,
     /// Max capture duration before auto-stopping (None = unlimited)
     pub max_capture_duration: Option<std::time::Duration>,
+    /// Pre-captured sequence snapshot to embed in the profile metadata.
+    pub sequence_snapshot: Option<Vec<SequenceState>>,
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
@@ -115,7 +118,12 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
 
     // Build and write profile
     let source_host = config.target_addr.clone();
-    let profile = build_profile(captured, &source_host, config.mask_values);
+    let mut profile = build_profile(captured, &source_host, config.mask_values);
+
+    // Inject sequence snapshot if captured
+    if config.sequence_snapshot.is_some() {
+        profile.metadata.sequence_snapshot = config.sequence_snapshot;
+    }
 
     info!(
         "Captured {} queries across {} sessions",
