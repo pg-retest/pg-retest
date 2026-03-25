@@ -9,7 +9,7 @@
 
 Capture, replay, and compare PostgreSQL workloads. Validate configuration changes, server migrations, capacity planning, and cross-database migrations with confidence.
 
-> **Important:** pg-retest is a workload simulation tool, not a replication system. Replay produces a high-fidelity approximation of your production traffic (90%+ realistic for most workloads), but it is **not** guaranteed to produce byte-identical results. Concurrent session ordering, non-deterministic functions (`now()`, `random()`, `gen_random_uuid()`), and timing-dependent sequences mean replayed data will differ in details while preserving the same statistical profile, query patterns, and performance characteristics. Use pg-retest to answer "will my workload perform the same on the new target?" — not "will my data be identical."
+> **Important:** pg-retest is a workload simulation tool, not a replication system. Replay produces a high-fidelity approximation of your production traffic (93-96% accuracy for write workloads with `--id-mode=full`, near-100% for read-only), but it is **not** guaranteed to produce byte-identical results. The 4-7% error rate in write workloads comes from concurrent session sequence ordering — the same fundamental limitation Oracle RAT documents as "replay divergence." Use pg-retest to answer "will my workload perform the same on the new target?" — not "will my data be identical." See [Expected Error Rates](docs/id-correlation.md#expected-error-rates) for detailed benchmarks.
 
 ---
 
