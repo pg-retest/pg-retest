@@ -78,6 +78,15 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
         other => anyhow::bail!("Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds"),
     };
 
+    if args.id_mode.needs_sequences() {
+        warn!(
+            "Sequence mode enabled (--id-mode {:?}) for log-based capture, but no live database \
+             connection is available. Sequence snapshot will not be included in the profile. \
+             Use proxy capture with --source-db to capture sequence state.",
+            args.id_mode
+        );
+    }
+
     if args.mask_values {
         for session in &mut profile.sessions {
             for query in &mut session.queries {
@@ -195,6 +204,53 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
 
     let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
     let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
+
+    // Restore sequences on target if id-mode requires it
+    if args.id_mode.needs_sequences() {
+        if let Some(ref snapshot) = replay_profile.metadata.sequence_snapshot {
+            info!(
+                "Restoring {} sequences on target before replay...",
+                snapshot.len()
+            );
+            let tls_for_seq =
+                pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
+            let rt_seq = tokio::runtime::Runtime::new()?;
+            let (reset, skipped, errors) = rt_seq.block_on(async {
+                use pg_retest::correlate::sequence::restore_sequences;
+                let client = if let Some(tls_connector) = tls_for_seq {
+                    let (client, connection) =
+                        tokio_postgres::connect(&target, tls_connector).await?;
+                    tokio::spawn(async move {
+                        if let Err(e) = connection.await {
+                            tracing::error!("Sequence restore connection error: {}", e);
+                        }
+                    });
+                    client
+                } else {
+                    use tokio_postgres::NoTls;
+                    let (client, connection) = tokio_postgres::connect(&target, NoTls).await?;
+                    tokio::spawn(async move {
+                        if let Err(e) = connection.await {
+                            tracing::error!("Sequence restore connection error: {}", e);
+                        }
+                    });
+                    client
+                };
+                Ok::<_, anyhow::Error>(restore_sequences(&client, snapshot).await)
+            })?;
+            info!(
+                "Sequence restore: {} reset, {} skipped, {} errors",
+                reset, skipped, errors
+            );
+        } else {
+            warn!(
+                "Sequence mode enabled (--id-mode {:?}) but workload profile has no sequence \
+                 snapshot. Sequences will not be restored. Re-capture with --id-mode sequence \
+                 and --source-db to include sequence data.",
+                args.id_mode
+            );
+        }
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
     let replay_start = std::time::Instant::now();
@@ -335,6 +391,48 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         (None, false) => Some("workload.wkl".into()),
     };
 
+    // Snapshot sequences if requested
+    let sequence_snapshot = if args.id_mode.needs_sequences() {
+        if let Some(ref source_db) = args.source_db {
+            let rt_tmp = tokio::runtime::Runtime::new()?;
+            match rt_tmp.block_on(async {
+                use pg_retest::correlate::sequence::snapshot_sequences;
+                use tokio_postgres::NoTls;
+                let (client, connection) = tokio_postgres::connect(source_db, NoTls).await?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        tracing::error!("Sequence snapshot connection error: {}", e);
+                    }
+                });
+                snapshot_sequences(&client).await
+            }) {
+                Ok(snap) => {
+                    info!(
+                        "Sequence snapshot: {} sequences captured from source",
+                        snap.len()
+                    );
+                    Some(snap)
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to snapshot sequences: {:#}. Continuing without sequence data.",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            warn!(
+                "Sequence mode enabled (--id-mode {:?}) but no --source-db provided. \
+                 Sequence snapshot will be skipped. Provide --source-db to capture sequence state.",
+                args.id_mode
+            );
+            None
+        }
+    } else {
+        None
+    };
+
     let config = ProxyConfig {
         listen_addr: args.listen,
         target_addr: args.target,
@@ -356,6 +454,7 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
             .max_capture_duration
             .as_deref()
             .and_then(|s| parse_duration(s).ok()),
+        sequence_snapshot,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

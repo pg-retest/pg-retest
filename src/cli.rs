@@ -295,6 +295,10 @@ pub struct ProxyArgs {
     /// ID handling mode: none, sequence, correlate, full
     #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
     pub id_mode: crate::correlate::IdMode,
+
+    /// Source database connection string for sequence snapshot (required when --id-mode sequence or full)
+    #[arg(long)]
+    pub source_db: Option<String>,
 }
 
 #[derive(clap::Args)]
