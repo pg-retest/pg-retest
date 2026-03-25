@@ -16,6 +16,12 @@ impl Clone for IdMap {
     }
 }
 
+impl Default for IdMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IdMap {
     pub fn new() -> Self {
         IdMap {

@@ -295,9 +295,7 @@ pub fn substitute_ids<'a>(sql: &'a str, map: &DashMap<String, String>) -> (Cow<'
                     }
                 } else {
                     // Part of identifier or decimal: push as-is and continue
-                    for j in num_start..i {
-                        result.push(chars[j]);
-                    }
+                    result.extend(chars[num_start..i].iter());
                     // Continue consuming identifier chars
                     while i < len
                         && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '.')
