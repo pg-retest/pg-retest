@@ -1,0 +1,78 @@
+services:
+  python-test:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./python:/app
+    environment:
+      DATABASE_URL: "host=pg-retest-proxy port=5433 dbname=ecommerce user=demo password=demo"
+    command: >
+      sh -c "pip install --quiet psycopg2-binary && python test_driver.py"
+    network_mode: host
+    extra_hosts:
+      - "pg-retest-proxy:host-gateway"
+
+  go-test:
+    image: golang:1.22
+    working_dir: /app
+    volumes:
+      - ./go:/app
+    environment:
+      DATABASE_URL: "host=pg-retest-proxy port=5433 dbname=ecommerce user=demo password=demo"
+      GOFLAGS: "-mod=mod"
+    command: >
+      sh -c "go mod tidy && go run main.go"
+    network_mode: host
+    extra_hosts:
+      - "pg-retest-proxy:host-gateway"
+
+  node-test:
+    image: node:20
+    working_dir: /app
+    volumes:
+      - ./node:/app
+    environment:
+      DATABASE_URL: "host=pg-retest-proxy port=5433 dbname=ecommerce user=demo password=demo"
+    command: >
+      sh -c "npm install --silent && node test_driver.js"
+    network_mode: host
+    extra_hosts:
+      - "pg-retest-proxy:host-gateway"
+
+  java-test:
+    image: eclipse-temurin:21
+    working_dir: /app
+    volumes:
+      - ./java:/app
+    environment:
+      PGHOST: pg-retest-proxy
+      PGPORT: "5433"
+      PGDATABASE: ecommerce
+      PGUSER: demo
+      PGPASSWORD: demo
+    command: >
+      sh -c "
+        curl -sL -o postgresql.jar https://jdbc.postgresql.org/download/postgresql-42.7.4.jar &&
+        javac TestDriver.java &&
+        java -cp .:postgresql.jar TestDriver
+      "
+    network_mode: host
+    extra_hosts:
+      - "pg-retest-proxy:host-gateway"
+
+  c-test:
+    image: postgres:16
+    working_dir: /app
+    volumes:
+      - ./c:/app
+    environment:
+      DATABASE_URL: "host=pg-retest-proxy port=5433 dbname=ecommerce user=demo password=demo"
+    command: >
+      sh -c "
+        apt-get update -qq && apt-get install -y -qq gcc make libpq-dev pkg-config > /dev/null 2>&1 &&
+        make &&
+        ./test_driver
+      "
+    network_mode: host
+    extra_hosts:
+      - "pg-retest-proxy:host-gateway"
