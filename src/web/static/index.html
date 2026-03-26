@@ -140,6 +140,478 @@
                 <div x-show="page === 'dashboard'" x-data="dashboardPage()" x-init="load()" x-effect="if ($store.app.page === 'dashboard') load()">
                     <div id="dashboard-content"></div>
                 </div>
+                <!-- Golden Path -->
+                <div x-show="page === 'golden-path'" x-data="goldenPathPage()" x-init="load()" x-effect="if ($store.app.page === 'golden-path') load()">
+                    <div id="golden-path-content">
+                        <div class="fade-in space-y-6">
+                            <!-- Header -->
+                            <div>
+                                <h2 class="text-xl font-semibold text-slate-100">Golden Path</h2>
+                                <p class="text-sm text-slate-500 mt-1">Walk through the complete pg-retest workflow step-by-step. Each step calls real APIs and shows real results.</p>
+                            </div>
+
+                            <!-- Step progress bar -->
+                            <div class="flex items-center gap-1">
+                                <template x-for="n in totalSteps" :key="n">
+                                    <div class="flex items-center">
+                                        <button @click="goToStep(n)"
+                                                class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-all duration-200 border"
+                                                :class="{
+                                                    'bg-accent/20 border-accent/40 text-accent': n === currentStep,
+                                                    'bg-accent border-accent text-slate-950': stepComplete[n],
+                                                    'bg-slate-900 border-slate-700 text-slate-500': n !== currentStep && !stepComplete[n],
+                                                    'cursor-pointer hover:border-slate-500': n <= currentStep || stepComplete[n - 1],
+                                                    'cursor-not-allowed opacity-40': n > currentStep && !stepComplete[n - 1],
+                                                }">
+                                            <span x-show="!stepComplete[n]" x-text="n"></span>
+                                            <svg x-show="stepComplete[n]" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                                        </button>
+                                        <div x-show="n < totalSteps" class="w-6 h-0.5 mx-0.5"
+                                             :class="stepComplete[n] ? 'bg-accent/40' : 'bg-slate-800'"></div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <!-- Step cards -->
+                            <template x-for="n in totalSteps" :key="'step-' + n">
+                                <div>
+                                    <!-- Completed step summary (collapsed) -->
+                                    <div x-show="stepComplete[n] && n !== currentStep"
+                                         @click="goToStep(n)"
+                                         class="card border-accent/20 bg-accent/5 cursor-pointer hover:bg-accent/10 transition-colors mb-3">
+                                        <div class="flex items-center gap-3">
+                                            <div class="w-10 h-10 rounded-xl bg-accent/20 border border-accent/30 flex items-center justify-center flex-shrink-0">
+                                                <svg class="w-5 h-5 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <span class="text-sm font-semibold text-slate-200" x-text="'Step ' + n + ': ' + stepTitle(n)"></span>
+                                                <span class="badge badge-success ml-2">Complete</span>
+                                            </div>
+                                            <svg class="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                                        </div>
+                                    </div>
+
+                                    <!-- Active step (expanded) -->
+                                    <div x-show="n === currentStep" class="card border-accent/30 mb-3">
+                                        <div class="flex items-center gap-3 mb-4">
+                                            <div class="w-12 h-12 rounded-xl bg-accent/20 border border-accent/30 flex items-center justify-center flex-shrink-0" x-html="stepIcon(n)">
+                                            </div>
+                                            <div>
+                                                <h3 class="text-lg font-semibold text-slate-100" x-text="'Step ' + n + ': ' + stepTitle(n)"></h3>
+                                                <p class="text-sm text-slate-500" x-text="stepDesc(n)"></p>
+                                            </div>
+                                        </div>
+
+                                        <!-- Error display -->
+                                        <div x-show="stepErrors[n]" class="mb-4 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
+                                            <span x-text="stepErrors[n]"></span>
+                                        </div>
+
+                                        <!-- Step 1: Live Traffic -->
+                                        <div x-show="n === 1" class="space-y-4">
+                                            <div class="flex items-center gap-3">
+                                                <button @click="checkProxy()" class="btn btn-secondary text-xs">Check Proxy Status</button>
+                                                <div x-show="proxyStatus" class="text-xs text-slate-400">
+                                                    <span x-show="proxyStatus?.running" class="text-accent">Proxy running</span>
+                                                    <span x-show="!proxyStatus?.running" class="text-slate-500">Proxy stopped</span>
+                                                </div>
+                                            </div>
+                                            <div x-show="!proxyStatus?.running">
+                                                <label class="label">Target Connection String</label>
+                                                <input class="input mb-2" x-model="targetConn" placeholder="host=localhost dbname=mydb user=postgres password=...">
+                                                <button @click="startProxy()" :disabled="stepLoading[1]"
+                                                        class="btn btn-primary text-xs">
+                                                    <span x-show="stepLoading[1]" class="spinner-sm mr-1"></span>
+                                                    Start Proxy
+                                                </button>
+                                            </div>
+                                            <div x-show="proxyStatus?.running && !captureRunning">
+                                                <button @click="startCapture()" :disabled="stepLoading[1]"
+                                                        class="btn btn-primary text-xs">
+                                                    <span x-show="stepLoading[1]" class="spinner-sm mr-1"></span>
+                                                    Start Capture
+                                                </button>
+                                            </div>
+                                            <div x-show="captureRunning" class="p-4 rounded-lg bg-slate-900 border border-slate-800">
+                                                <div class="flex items-center gap-3">
+                                                    <span class="relative flex h-3 w-3">
+                                                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                                                        <span class="relative inline-flex rounded-full h-3 w-3 bg-accent"></span>
+                                                    </span>
+                                                    <span class="text-sm text-accent font-medium">Capturing live traffic</span>
+                                                    <span class="text-lg font-mono font-semibold text-slate-200" x-text="captureQueryCount"></span>
+                                                    <span class="text-xs text-slate-500">queries captured</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 2: Capture Complete -->
+                                        <div x-show="n === 2" class="space-y-4">
+                                            <button @click="stopCapture()" :disabled="stepLoading[2]"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[2]" class="spinner-sm mr-1"></span>
+                                                Stop Capture &amp; Finalize
+                                            </button>
+                                            <div x-show="captureInspect" class="space-y-3">
+                                                <div class="grid-stats">
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Sessions</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="captureInspect?.metadata?.total_sessions || captureInspect?.sessions || '-'"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Queries</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="captureInspect?.metadata?.total_queries || '-'"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Duration</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="fmtDuration(captureInspect?.metadata?.capture_duration_us)"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Capture Method</span>
+                                                        <div class="text-lg font-semibold font-mono text-accent" x-text="captureInspect?.capture_method || '-'"></div>
+                                                    </div>
+                                                </div>
+                                                <div x-show="restorePoint" class="p-3 rounded-lg bg-amber-400/10 border border-amber-400/20 text-sm text-amber-400">
+                                                    Restore point: <span class="font-mono" x-text="restorePoint"></span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 3: Compile -->
+                                        <div x-show="n === 3" class="space-y-4">
+                                            <p class="text-sm text-slate-400">Pre-resolve generated IDs in the workload so replay is deterministic. No <code class="font-mono text-accent text-xs">--id-mode</code> needed at replay time.</p>
+                                            <button @click="compileWorkload()" :disabled="stepLoading[3]"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[3]" class="spinner-sm mr-1"></span>
+                                                Compile Workload
+                                            </button>
+                                            <div x-show="compileStats" class="p-4 rounded-lg bg-slate-900 border border-slate-800">
+                                                <div class="grid grid-cols-3 gap-4">
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Unique IDs</span>
+                                                        <div class="text-lg font-mono font-semibold text-slate-200" x-text="compileStats?.unique_ids || compileStats?.stats?.unique_ids || '-'"></div>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Referencing Queries</span>
+                                                        <div class="text-lg font-mono font-semibold text-slate-200" x-text="compileStats?.referencing_queries || compileStats?.stats?.referencing_queries || '-'"></div>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Total References</span>
+                                                        <div class="text-lg font-mono font-semibold text-slate-200" x-text="compileStats?.total_references || compileStats?.stats?.total_references || '-'"></div>
+                                                    </div>
+                                                </div>
+                                                <p class="text-xs text-slate-500 mt-3">The compiled workload replays deterministically -- no --id-mode needed.</p>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 4: Restore & Replay -->
+                                        <div x-show="n === 4" class="space-y-4">
+                                            <div x-show="restorePoint" class="p-3 rounded-lg bg-amber-400/10 border border-amber-400/20 text-sm text-amber-400">
+                                                Restore your backup to the target before replaying. Restore point: <span class="font-mono" x-text="restorePoint"></span>
+                                            </div>
+                                            <div>
+                                                <label class="label">Target Connection String</label>
+                                                <input class="input" x-model="targetConn" placeholder="host=localhost dbname=target user=postgres password=...">
+                                            </div>
+                                            <button @click="startReplay()" :disabled="stepLoading[4] || replayDone"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[4] && !replayDone" class="spinner-sm mr-1"></span>
+                                                Start Replay
+                                            </button>
+                                            <div x-show="stepLoading[4] && !replayDone" class="space-y-2">
+                                                <div class="flex items-center justify-between text-xs text-slate-400">
+                                                    <span>Replaying...</span>
+                                                    <span class="font-mono text-accent" x-text="replayProgress.toFixed(1) + '%'"></span>
+                                                </div>
+                                                <div class="progress-bar">
+                                                    <div class="progress-bar-fill" :style="'width: ' + replayProgress + '%'"></div>
+                                                </div>
+                                            </div>
+                                            <div x-show="replayDone" class="p-4 rounded-lg bg-slate-900 border border-accent/20">
+                                                <div class="flex items-center gap-2 text-accent text-sm font-medium mb-2">
+                                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                                                    Replay Complete
+                                                </div>
+                                                <div class="grid grid-cols-3 gap-4 text-sm">
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Queries</span>
+                                                        <div class="font-mono text-slate-200" x-text="replayResult?.queries_replayed || replayResult?.total_queries || '-'"></div>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Errors</span>
+                                                        <div class="font-mono" :class="(replayResult?.errors || 0) > 0 ? 'text-danger' : 'text-slate-200'" x-text="replayResult?.errors || replayResult?.total_errors || '0'"></div>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Duration</span>
+                                                        <div class="font-mono text-slate-200" x-text="replayResult?.duration || '-'"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 5: Compare -->
+                                        <div x-show="n === 5" class="space-y-4">
+                                            <button @click="computeCompare()" :disabled="stepLoading[5]"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[5]" class="spinner-sm mr-1"></span>
+                                                Compute Comparison
+                                            </button>
+                                            <div x-show="compareReport" class="space-y-4">
+                                                <!-- Latency overview -->
+                                                <div class="grid-stats">
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Source Avg</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="fmtDuration(compareReport?.source_avg_us || compareReport?.summary?.source_avg_us)"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Replay Avg</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="fmtDuration(compareReport?.replay_avg_us || compareReport?.summary?.replay_avg_us)"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Delta</span>
+                                                        <div class="text-2xl font-semibold font-mono"
+                                                             :class="pctColor(compareReport?.avg_delta_pct || compareReport?.summary?.avg_delta_pct)"
+                                                             x-text="fmtPct(compareReport?.avg_delta_pct || compareReport?.summary?.avg_delta_pct)"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Errors</span>
+                                                        <div class="text-2xl font-semibold font-mono"
+                                                             :class="(compareReport?.error_count || compareReport?.summary?.error_count || 0) > 0 ? 'text-danger' : 'text-accent'"
+                                                             x-text="compareReport?.error_count || compareReport?.summary?.error_count || '0'"></div>
+                                                    </div>
+                                                </div>
+                                                <!-- Percentiles -->
+                                                <div x-show="compareReport?.percentiles || compareReport?.summary?.percentiles" class="card">
+                                                    <h4 class="text-sm font-semibold text-slate-300 mb-3">Latency Percentiles</h4>
+                                                    <div class="grid grid-cols-3 gap-4">
+                                                        <template x-for="pKey in ['p50', 'p95', 'p99']" :key="pKey">
+                                                            <div class="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                                                                <span class="text-xs text-slate-500 uppercase" x-text="pKey"></span>
+                                                                <div class="font-mono text-sm text-slate-200 mt-1" x-text="fmtDuration((compareReport?.percentiles || compareReport?.summary?.percentiles || {})[pKey + '_us'] || (compareReport?.percentiles || compareReport?.summary?.percentiles || {})[pKey])"></div>
+                                                                <div class="text-xs font-mono mt-0.5"
+                                                                     :class="pctColor((compareReport?.percentiles || compareReport?.summary?.percentiles || {})[pKey + '_delta_pct'])"
+                                                                     x-text="fmtPct((compareReport?.percentiles || compareReport?.summary?.percentiles || {})[pKey + '_delta_pct'])"></div>
+                                                            </div>
+                                                        </template>
+                                                    </div>
+                                                </div>
+                                                <!-- Top regressions -->
+                                                <div x-show="(compareReport?.regressions || compareReport?.top_regressions || []).length > 0" class="card">
+                                                    <h4 class="text-sm font-semibold text-slate-300 mb-3">Top Regressions</h4>
+                                                    <div class="overflow-x-auto">
+                                                        <table class="data-table">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th>Query</th>
+                                                                    <th class="text-right">Source</th>
+                                                                    <th class="text-right">Replay</th>
+                                                                    <th class="text-right">Delta</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <template x-for="reg in (compareReport?.regressions || compareReport?.top_regressions || []).slice(0, 10)" :key="reg.query || reg.sql">
+                                                                    <tr>
+                                                                        <td class="font-mono text-xs text-slate-400 max-w-xs truncate" x-text="(reg.query || reg.sql || '').substring(0, 80)"></td>
+                                                                        <td class="text-right font-mono text-xs" x-text="fmtDuration(reg.source_us || reg.source_avg_us)"></td>
+                                                                        <td class="text-right font-mono text-xs" x-text="fmtDuration(reg.replay_us || reg.replay_avg_us)"></td>
+                                                                        <td class="text-right font-mono text-xs" :class="pctColor(reg.delta_pct)" x-text="fmtPct(reg.delta_pct)"></td>
+                                                                    </tr>
+                                                                </template>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 6: Drift Check -->
+                                        <div x-show="n === 6" class="space-y-4">
+                                            <div class="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label class="label">DB-A Connection String</label>
+                                                    <input class="input" x-model="driftDbA" placeholder="host=localhost dbname=source user=postgres password=...">
+                                                </div>
+                                                <div>
+                                                    <label class="label">DB-B Connection String</label>
+                                                    <input class="input" x-model="driftDbB" placeholder="host=localhost dbname=target user=postgres password=...">
+                                                </div>
+                                            </div>
+                                            <button @click="runDriftCheck()" :disabled="stepLoading[6]"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[6]" class="spinner-sm mr-1"></span>
+                                                Run Drift Check
+                                            </button>
+                                            <div x-show="driftResults" class="space-y-3">
+                                                <div class="grid-stats">
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Tables</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="driftResults?.summary?.total || '-'"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Matching</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="driftResults?.summary?.matching || '-'"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Drifted</span>
+                                                        <div class="text-2xl font-semibold font-mono"
+                                                             :class="(driftResults?.summary?.drifted || 0) > 0 ? 'text-danger' : 'text-accent'"
+                                                             x-text="driftResults?.summary?.drifted || '0'"></div>
+                                                    </div>
+                                                </div>
+                                                <div class="card">
+                                                    <div class="overflow-x-auto">
+                                                        <table class="data-table">
+                                                            <thead>
+                                                                <tr>
+                                                                    <th>Table</th>
+                                                                    <th class="text-right">DB-A</th>
+                                                                    <th class="text-right">DB-B</th>
+                                                                    <th>Status</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <template x-for="t in (driftResults?.tables || [])" :key="t.name">
+                                                                    <tr>
+                                                                        <td class="font-mono text-sm text-slate-300" x-text="t.name"></td>
+                                                                        <td class="text-right font-mono text-sm" x-text="t.db_a_count != null ? t.db_a_count.toLocaleString() : '-'"></td>
+                                                                        <td class="text-right font-mono text-sm" x-text="t.db_b_count != null ? t.db_b_count.toLocaleString() : '-'"></td>
+                                                                        <td>
+                                                                            <span class="badge"
+                                                                                  :class="t.status === 'MATCH' ? 'bg-accent/10 border-accent/20 text-accent' : 'bg-danger/10 border-danger/20 text-danger'"
+                                                                                  x-text="t.status"></span>
+                                                                        </td>
+                                                                    </tr>
+                                                                </template>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 7: Synthesize -->
+                                        <div x-show="n === 7" class="space-y-4">
+                                            <p class="text-sm text-slate-400">Generate a synthetic benchmark workload from the captured traffic. This creates a reusable workload with generated data.</p>
+                                            <div class="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label class="label">Source DB Connection (for schema introspection)</label>
+                                                    <input class="input" x-model="sourceConn" placeholder="host=localhost dbname=source user=postgres password=...">
+                                                </div>
+                                                <div class="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label class="label">Sessions (optional)</label>
+                                                        <input class="input" x-model="synthSessions" type="number" placeholder="auto">
+                                                    </div>
+                                                    <div>
+                                                        <label class="label">Scale Factor (optional)</label>
+                                                        <input class="input" x-model="synthScale" type="number" step="0.1" placeholder="1.0">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button @click="synthesize()" :disabled="stepLoading[7]"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[7]" class="spinner-sm mr-1"></span>
+                                                Generate Synthetic Workload
+                                            </button>
+                                            <div x-show="syntheticStats" class="p-4 rounded-lg bg-slate-900 border border-slate-800">
+                                                <div class="grid grid-cols-3 gap-4">
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Sessions</span>
+                                                        <div class="text-lg font-mono font-semibold text-slate-200" x-text="syntheticStats?.sessions || '-'"></div>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Queries</span>
+                                                        <div class="text-lg font-mono font-semibold text-slate-200" x-text="syntheticStats?.queries || syntheticStats?.total_queries || '-'"></div>
+                                                    </div>
+                                                    <div>
+                                                        <span class="text-xs text-slate-500">Template Match Rate</span>
+                                                        <div class="text-lg font-mono font-semibold text-accent" x-text="syntheticStats?.template_match_rate ? (syntheticStats.template_match_rate * 100).toFixed(1) + '%' : '-'"></div>
+                                                    </div>
+                                                </div>
+                                                <div x-show="syntheticDataPath" class="mt-3 p-2 rounded bg-slate-950 border border-slate-800">
+                                                    <span class="text-xs text-slate-500">Data SQL:</span>
+                                                    <span class="text-xs font-mono text-slate-300 ml-1" x-text="syntheticDataPath"></span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Step 8: Benchmark -->
+                                        <div x-show="n === 8" class="space-y-4">
+                                            <div x-show="syntheticDataPath" class="p-3 rounded-lg bg-amber-400/10 border border-amber-400/20 text-sm text-amber-400">
+                                                Load synthetic data first: <code class="font-mono text-xs">psql target &lt; <span x-text="syntheticDataPath"></span></code>
+                                            </div>
+                                            <button @click="runSyntheticReplay()" :disabled="stepLoading[8] || synthReplayDone"
+                                                    class="btn btn-primary text-xs">
+                                                <span x-show="stepLoading[8] && !synthReplayDone" class="spinner-sm mr-1"></span>
+                                                Run Synthetic Replay
+                                            </button>
+                                            <div x-show="synthReplayDone && !synthCompareReport">
+                                                <button @click="computeSynthCompare()" :disabled="stepLoading[8]"
+                                                        class="btn btn-secondary text-xs">
+                                                    <span x-show="stepLoading[8]" class="spinner-sm mr-1"></span>
+                                                    Compute Benchmark Comparison
+                                                </button>
+                                            </div>
+                                            <div x-show="synthCompareReport" class="space-y-3">
+                                                <div class="grid-stats">
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Source Avg</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="fmtDuration(synthCompareReport?.source_avg_us || synthCompareReport?.summary?.source_avg_us)"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Replay Avg</span>
+                                                        <div class="text-2xl font-semibold font-mono text-accent" x-text="fmtDuration(synthCompareReport?.replay_avg_us || synthCompareReport?.summary?.replay_avg_us)"></div>
+                                                    </div>
+                                                    <div class="card stat-card">
+                                                        <span class="text-xs font-medium text-slate-500 uppercase tracking-wider">Delta</span>
+                                                        <div class="text-2xl font-semibold font-mono"
+                                                             :class="pctColor(synthCompareReport?.avg_delta_pct || synthCompareReport?.summary?.avg_delta_pct)"
+                                                             x-text="fmtPct(synthCompareReport?.avg_delta_pct || synthCompareReport?.summary?.avg_delta_pct)"></div>
+                                                    </div>
+                                                </div>
+                                                <div class="p-4 rounded-lg bg-accent/10 border border-accent/20 text-center">
+                                                    <svg class="w-8 h-8 text-accent mx-auto mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                                                    <p class="text-sm text-accent font-medium">Golden Path Complete!</p>
+                                                    <p class="text-xs text-slate-500 mt-1">You have walked through the full pg-retest workflow end to end.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <!-- Navigation buttons -->
+                                        <div class="flex items-center justify-between mt-6 pt-4 border-t border-slate-800">
+                                            <button @click="prevStep()" x-show="currentStep > 1"
+                                                    class="btn btn-secondary text-xs">
+                                                <svg class="w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+                                                Previous
+                                            </button>
+                                            <div x-show="currentStep === 1"></div>
+                                            <button @click="nextStep()" x-show="currentStep < totalSteps"
+                                                    :disabled="!canAdvance()"
+                                                    class="btn btn-primary text-xs"
+                                                    :class="{ 'opacity-40 cursor-not-allowed': !canAdvance() }">
+                                                Next
+                                                <svg class="w-3 h-3 ml-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Future step (grayed out) -->
+                                    <div x-show="n > currentStep && !stepComplete[n]"
+                                         class="card opacity-30 mb-3">
+                                        <div class="flex items-center gap-3">
+                                            <div class="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center flex-shrink-0 text-slate-600" x-html="stepIcon(n)">
+                                            </div>
+                                            <div>
+                                                <span class="text-sm font-semibold text-slate-400" x-text="'Step ' + n + ': ' + stepTitle(n)"></span>
+                                                <p class="text-xs text-slate-600" x-text="stepDesc(n)"></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
                 <!-- Demo -->
                 <div x-show="page === 'demo'" x-data="demoPage()" x-init="load()" x-effect="if ($store.app.page === 'demo') load()">
                     <div id="demo-content"></div>
@@ -199,6 +671,7 @@
     <script src="/js/components/tables.js"></script>
     <script src="/js/components/forms.js"></script>
     <script src="/js/components/status.js"></script>
+    <script src="/js/pages/golden-path.js"></script>
     <script src="/js/pages/demo.js"></script>
     <script src="/js/pages/dashboard.js"></script>
     <script src="/js/pages/workloads.js"></script>
