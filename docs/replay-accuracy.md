@@ -7,9 +7,16 @@ pg-retest is a workload simulation tool. This document explains exactly how accu
 | Workload Type | Accuracy | Error Source |
 |--------------|----------|-------------|
 | Read-only (`--read-only`) | ~100% | None (all SELECTs execute) |
-| Write, single-session | ~100% | None (IDs are sequential within a session) |
-| Write, concurrent, `--id-mode=full` | 93-96% | Cross-session execution ordering race |
+| Write, intra-session IDs, `--id-mode=full` | **99.98%** | Rare sequence race within transactions |
+| Write, cross-session IDs, `--id-mode=full` | 93-96% | Cross-session execution ordering race |
 | Write, concurrent, `--id-mode=none` | 85-92% | Sequence drift + ordering race |
+
+**The accuracy depends heavily on your application's ID reference pattern:**
+
+- **Intra-session** (each session creates and uses its own IDs): **99.98%** — near-perfect. Measured: 96 errors / 468,387 queries with 20 concurrent threads, 62% writes.
+- **Cross-session** (Session B references IDs created by Session A): **93-96%** — the ordering race causes 4-7% FK failures. Measured: 6,160 errors / 99,919 queries.
+
+Most real applications are closer to the intra-session pattern (a web request creates a resource and operates on it within the same DB connection). Connection-pooled apps with shared state are closer to cross-session.
 
 ## What "Accuracy" Means
 
