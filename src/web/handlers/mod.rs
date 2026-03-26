@@ -1,6 +1,7 @@
 pub mod ab;
 pub mod compare;
 pub mod demo;
+pub mod drift;
 pub mod pipeline;
 pub mod proxy;
 pub mod replay;

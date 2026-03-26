@@ -73,6 +73,45 @@ function workloadsPage() {
                     </div>
                 </div>
             </div>
+
+            <!-- Synthesize modal -->
+            <div id="synthesize-modal" class="hidden">
+                <div class="modal-overlay" onclick="closeSynthesizeModal()">
+                    <div class="modal-content" onclick="event.stopPropagation()">
+                        <h3 class="text-base font-semibold mb-4">Synthesize Workload</h3>
+                        <p class="text-xs text-slate-400 mb-4" id="synthesize-source-label"></p>
+                        <form id="synthesize-form" onsubmit="handleSynthesize(event)">
+                            <input type="hidden" name="workload_id" id="synthesize-workload-id">
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="label">Source DB Connection String <span class="text-danger">*</span></label>
+                                    <input class="input" name="source_db" required
+                                           placeholder="host=localhost dbname=mydb user=postgres password=...">
+                                </div>
+                                <div class="grid grid-cols-3 gap-3">
+                                    <div>
+                                        <label class="label">Sessions</label>
+                                        <input class="input" type="number" name="sessions" min="1" placeholder="auto">
+                                    </div>
+                                    <div>
+                                        <label class="label">Scale Data</label>
+                                        <input class="input" type="number" name="scale_data" step="0.1" min="0.1" placeholder="1.0">
+                                    </div>
+                                    <div>
+                                        <label class="label">Seed</label>
+                                        <input class="input" type="number" name="seed" placeholder="random">
+                                    </div>
+                                </div>
+                                <div class="flex justify-end gap-2 pt-2">
+                                    <button type="button" class="btn btn-secondary" onclick="closeSynthesizeModal()">Cancel</button>
+                                    <button type="submit" class="btn btn-primary" id="synthesize-submit-btn">Synthesize</button>
+                                </div>
+                            </div>
+                        </form>
+                        <div id="synthesize-status" class="mt-3 hidden"></div>
+                    </div>
+                </div>
+            </div>
             `;
         },
 
@@ -88,6 +127,7 @@ function workloadsPage() {
                     <div class="flex gap-1">
                         <button class="btn btn-secondary btn-sm" onclick="inspectWorkload('${r.id}')">Inspect</button>
                         ${r.source_type === 'proxy' ? `<button class="btn btn-secondary btn-sm" id="compile-btn-${r.id}" onclick="compileWorkload('${r.id}')">Compile</button>` : ''}
+                        <button class="btn btn-secondary btn-sm" onclick="openSynthesizeModal('${r.id}', '${r.name}')">Synthesize</button>
                         <button class="btn btn-danger btn-sm" onclick="deleteWorkload('${r.id}')">Delete</button>
                     </div>
                 `},
@@ -271,6 +311,60 @@ async function deleteWorkload(id) {
         window.showToast(res.error, 'error');
     } else {
         window.showToast('Workload deleted', 'success');
+        const page = Alpine.$data(document.querySelector('[x-data="workloadsPage()"]'));
+        if (page) page.load();
+    }
+}
+
+// Synthesize workload handlers
+function openSynthesizeModal(id, name) {
+    document.getElementById('synthesize-workload-id').value = id;
+    document.getElementById('synthesize-source-label').textContent = 'Source: ' + name;
+    document.getElementById('synthesize-status').classList.add('hidden');
+    document.getElementById('synthesize-form').reset();
+    document.getElementById('synthesize-workload-id').value = id;
+    document.getElementById('synthesize-modal').classList.remove('hidden');
+}
+
+function closeSynthesizeModal() {
+    document.getElementById('synthesize-modal').classList.add('hidden');
+}
+
+async function handleSynthesize(e) {
+    e.preventDefault();
+    const form = e.target;
+    const statusEl = document.getElementById('synthesize-status');
+    const submitBtn = document.getElementById('synthesize-submit-btn');
+    const workloadId = document.getElementById('synthesize-workload-id').value;
+
+    statusEl.classList.remove('hidden');
+    statusEl.innerHTML = Status.loading('Synthesizing workload...');
+    submitBtn.disabled = true;
+
+    const config = {
+        source_db: form.source_db.value,
+    };
+    if (form.sessions.value) config.sessions = parseInt(form.sessions.value);
+    if (form.scale_data.value) config.scale_data = parseFloat(form.scale_data.value);
+    if (form.seed.value) config.seed = parseInt(form.seed.value);
+
+    const res = await api.synthesizeWorkload(workloadId, config);
+    submitBtn.disabled = false;
+
+    if (res.error) {
+        statusEl.innerHTML = Status.error(res.error);
+    } else {
+        statusEl.innerHTML = `
+            <div class="rounded-md bg-accent/10 border border-accent/20 p-3 text-sm">
+                <div class="text-accent font-medium mb-1">Synthesis complete</div>
+                <div class="text-slate-300 text-xs space-y-1">
+                    <div>New workload: <span class="font-mono">${res.workload?.name || res.id}</span></div>
+                    <div>Sessions: ${res.workload?.total_sessions || '?'} | Queries: ${res.workload?.total_queries || '?'}</div>
+                    ${res.data_sql_path ? `<div>Data SQL: <span class="font-mono text-slate-400">${res.data_sql_path}</span></div>` : ''}
+                </div>
+            </div>
+        `;
+        window.showToast('Workload synthesized successfully', 'success');
         const page = Alpine.$data(document.querySelector('[x-data="workloadsPage()"]'));
         if (page) page.load();
     }

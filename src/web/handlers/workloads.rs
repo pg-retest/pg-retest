@@ -3,9 +3,23 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::web::state::AppState;
+
+#[derive(Deserialize)]
+pub struct SynthesizeConfig {
+    pub source_db: String,
+    #[serde(default)]
+    pub sessions: Option<u32>,
+    #[serde(default)]
+    pub think_time_ms: Option<u64>,
+    #[serde(default)]
+    pub scale_data: Option<f64>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+}
 
 /// GET /api/v1/workloads
 pub async fn list_workloads(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -298,4 +312,152 @@ pub async fn delete_workload(
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+/// POST /api/v1/workloads/{id}/synthesize
+///
+/// Shells out to the Python synthesizer to generate a synthetic workload from
+/// a captured one. The generated .wkl is imported into SQLite automatically.
+pub async fn synthesize_workload(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(config): Json<SynthesizeConfig>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // 1. Get the workload metadata from SQLite
+    let db = state.db.lock().await;
+    let workload = match crate::web::db::get_workload(&db, &id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    drop(db);
+
+    // 2. Locate the Python synthesizer script
+    let script_path = find_synthesizer_script().ok_or_else(|| {
+        tracing::warn!("synthesize-workload.py not found");
+        StatusCode::NOT_FOUND
+    })?;
+
+    // 3. Prepare output paths
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let wkl_dir = state.data_dir.join("workloads");
+    std::fs::create_dir_all(&wkl_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let output_wkl = wkl_dir.join(format!("{new_id}.wkl"));
+    let output_data = state
+        .data_dir
+        .join("tmp")
+        .join(format!("{new_id}-data.sql"));
+    std::fs::create_dir_all(output_data.parent().unwrap())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let seed = config.seed.unwrap_or_else(rand::random::<u64>);
+
+    // 4. Shell out to Python
+    let mut cmd = tokio::process::Command::new("python3");
+    cmd.arg(&script_path)
+        .arg("--input")
+        .arg(&workload.file_path)
+        .arg("--source-db")
+        .arg(&config.source_db)
+        .arg("--output-workload")
+        .arg(&output_wkl)
+        .arg("--output-data")
+        .arg(&output_data)
+        .arg("--seed")
+        .arg(seed.to_string());
+
+    if let Some(sessions) = config.sessions {
+        cmd.arg("--sessions").arg(sessions.to_string());
+    }
+    if let Some(think_time_ms) = config.think_time_ms {
+        cmd.arg("--think-time-ms").arg(think_time_ms.to_string());
+    }
+    if let Some(scale_data) = config.scale_data {
+        cmd.arg("--scale-data").arg(scale_data.to_string());
+    }
+
+    let output = cmd.output().await.map_err(|e| {
+        tracing::warn!("Failed to execute synthesizer: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!("Synthesizer failed: {stderr}");
+        return Ok(Json(json!({
+            "error": format!("Synthesizer failed: {}", stderr.trim())
+        })));
+    }
+
+    // 5. Import the generated .wkl into SQLite
+    let profile = crate::profile::io::read_profile(&output_wkl).map_err(|e| {
+        tracing::warn!("Failed to read synthesized profile: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let classification = crate::classify::classify_workload(&profile);
+    let synth_name = format!("{}-synthesized", workload.name);
+
+    let row = crate::web::db::WorkloadRow {
+        id: new_id.clone(),
+        name: synth_name,
+        file_path: output_wkl.to_string_lossy().to_string(),
+        source_type: Some("synthesized".to_string()),
+        source_host: Some(workload.source_host.unwrap_or_default()),
+        captured_at: Some(chrono::Utc::now().to_rfc3339()),
+        total_sessions: Some(profile.metadata.total_sessions as i64),
+        total_queries: Some(profile.metadata.total_queries as i64),
+        capture_duration_us: Some(profile.metadata.capture_duration_us as i64),
+        classification: Some(serde_json::to_string(&classification).unwrap_or_default()),
+        created_at: None,
+    };
+
+    let db = state.db.lock().await;
+    crate::web::db::insert_workload(&db, &row).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let stdout_msg = String::from_utf8_lossy(&output.stdout);
+
+    Ok(Json(json!({
+        "id": new_id,
+        "workload": row,
+        "data_sql_path": output_data.to_string_lossy(),
+        "seed": seed,
+        "synthesizer_output": stdout_msg.trim(),
+    })))
+}
+
+/// Find the synthesize-workload.py script in known locations.
+fn find_synthesizer_script() -> Option<std::path::PathBuf> {
+    // 1. Check env var
+    if let Ok(demo_dir) = std::env::var("PG_RETEST_DEMO_DIR") {
+        let p = std::path::PathBuf::from(demo_dir).join("synthesize-workload.py");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // 2. Check relative to cwd
+    let cwd_path = std::path::PathBuf::from("demo/synthesize-workload.py");
+    if cwd_path.exists() {
+        return Some(cwd_path);
+    }
+    // 3. Check relative to binary
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join("demo/synthesize-workload.py");
+            if p.exists() {
+                return Some(p);
+            }
+            // Also check one level up (for target/debug layout)
+            let p = parent
+                .parent()
+                .and_then(|pp| pp.parent())
+                .map(|pp| pp.join("demo/synthesize-workload.py"));
+            if let Some(p) = p {
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
 }
