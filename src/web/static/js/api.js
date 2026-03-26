@@ -44,6 +44,7 @@ const api = {
     getWorkload(id) { return this.get(`/workloads/${id}`); },
     inspectWorkload(id) { return this.get(`/workloads/${id}/inspect`); },
     deleteWorkload(id) { return this.del(`/workloads/${id}`); },
+    compileWorkload(id) { return this.post(`/workloads/${id}/compile`); },
     uploadWorkload(formData) { return this.request('POST', '/workloads/upload', formData); },
     importWorkload(formData) { return this.request('POST', '/workloads/import', formData); },
 

@@ -37,6 +37,10 @@ pub fn build_router(state: AppState, auth_token: Option<String>) -> Router {
             "/workloads/{id}/inspect",
             get(handlers::workloads::inspect_workload),
         )
+        .route(
+            "/workloads/{id}/compile",
+            post(handlers::workloads::compile_workload),
+        )
         // Proxy
         .route("/proxy/status", get(handlers::proxy::proxy_status))
         .route("/proxy/start", post(handlers::proxy::start_proxy))
