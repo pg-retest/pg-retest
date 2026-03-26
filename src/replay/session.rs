@@ -123,6 +123,22 @@ pub async fn replay_session(
                     }
                 }
             }
+
+            // Warn if replay returned more rows than captured
+            let replay_row_count = messages
+                .iter()
+                .filter(|m| matches!(m, SimpleQueryMessage::Row(_)))
+                .count();
+            let captured_row_count = captured_rows.len();
+            if replay_row_count > captured_row_count {
+                debug!(
+                    "Session {}: replay returned {} rows but only {} captured — {} unmapped",
+                    session.id,
+                    replay_row_count,
+                    captured_row_count,
+                    replay_row_count - captured_row_count
+                );
+            }
         }
 
         let (success, error) = match result {
