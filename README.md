@@ -3,7 +3,7 @@
 ![Rust](https://img.shields.io/badge/language-Rust-orange?logo=rust)
 ![Version](https://img.shields.io/badge/version-1.0.0--rc.1-green)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-336791?logo=postgresql&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-232-brightgreen)
+![Tests](https://img.shields.io/badge/tests-323-brightgreen)
 ![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-brightgreen)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 
@@ -266,6 +266,7 @@ sequenceDiagram
 | `transform` | AI-powered workload transformation (analyze/plan/apply) |
 | `tune` | AI-assisted database tuning |
 | `proxy-ctl` | Control a running persistent proxy (start/stop capture, recover) |
+| `compile` | Compile a workload for deterministic replay (pre-resolve IDs, strip response_values) |
 
 ---
 
@@ -488,6 +489,28 @@ Database-generated IDs (sequences, UUIDs, identity columns) diverge when replayi
 | `sequence` | Snapshot sequences at capture time, reset on target before replay. Handles serial/bigserial/identity columns. |
 | `correlate` | Capture RETURNING values through the proxy, substitute during replay. Handles sequences, UUIDs, and any RETURNING value. Requires proxy capture. |
 | `full` | Sequence reset + correlation combined. Maximum fidelity for write-heavy workloads. |
+
+**Key capabilities:**
+
+- **Stealth mode (default):** When using `--id-capture-implicit`, the proxy strips auto-injected RETURNING results before forwarding to the client. The client sees only `CommandComplete + ReadyForQuery` — identical to a bare INSERT with no RETURNING. This makes implicit ID capture safe for all drivers and ORMs (JDBC, asyncpg, Entity Framework, Go lib/pq, etc.) without any application changes.
+
+- **Auto restore point creation:** When capture starts, pg-retest automatically calls `pg_create_restore_point('pg_retest_capture_YYYYMMDD_HHMMSS')` on the source database. This gives you a named PITR target to restore to before each replay iteration — no need to note a manual timestamp.
+
+- **Deterministic replay via `compile`:** After capturing with `--id-mode=correlate` or `--id-mode=full`, run `pg-retest compile` to pre-resolve all ID references. The compiled workload replays without any `--id-mode` flag needed — ideal for CI/CD pipelines and repeated replay against PITR-restored targets.
+
+```bash
+# Compile a captured workload for deterministic replay
+pg-retest compile --input workload.wkl --output workload-compiled.wkl
+
+# Replay the compiled workload — no --id-mode needed
+pg-retest replay \
+  --workload workload-compiled.wkl \
+  --target "host=target-host dbname=myapp user=postgres"
+```
+
+- **Synthetic workload generation:** The transform feature can generate synthetic workloads from captured profiles, producing fixed IDs and matching data that replay cleanly without ID drift. Use `pg-retest transform apply` with a synthesize plan to create a reusable, self-contained benchmark.
+
+For the full production workflow — including proxy deployment, PITR restore, and iterative testing loops — see the [Production Workflow Guide](docs/production-workflow.md).
 
 See [docs/id-correlation.md](docs/id-correlation.md) for detailed usage, driver compatibility, and known limitations.
 
@@ -871,7 +894,7 @@ cargo build
 # Release build (optimized)
 cargo build --release
 
-# Run all tests (216 tests)
+# Run all tests (323 tests)
 cargo test
 
 # Run a single test file
