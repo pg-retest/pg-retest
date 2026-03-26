@@ -23,7 +23,6 @@ enum State {
     InIdentifier,
     InLineComment,
     InBlockComment,
-    InDollarQuote,
     InNumericLiteral,
 }
 
@@ -69,12 +68,37 @@ pub fn substitute_ids<'a>(sql: &'a str, map: &DashMap<String, String>) -> (Cow<'
                     continue;
                 }
 
-                // Dollar-quoted string: $$
-                if ch == '$' && i + 1 < len && chars[i + 1] == '$' {
+                // Dollar-quoted string: $$ or $tag$
+                if ch == '$' {
+                    // Collect tag chars after the opening $
+                    let tag_start = i;
+                    let mut tag_end = i + 1;
+                    while tag_end < len
+                        && (chars[tag_end].is_ascii_alphanumeric() || chars[tag_end] == '_')
+                    {
+                        tag_end += 1;
+                    }
+                    if tag_end < len && chars[tag_end] == '$' {
+                        // Found opening $tag$ (or $$) — collect the tag string
+                        let tag: String = chars[tag_start..=tag_end].iter().collect();
+                        result.push_str(&tag);
+                        i = tag_end + 1;
+                        // Find closing $tag$
+                        let rest: String = chars[i..].iter().collect();
+                        if let Some(close_pos) = rest.find(&tag) {
+                            result.push_str(&rest[..close_pos]);
+                            result.push_str(&tag);
+                            i += close_pos + tag.len();
+                        } else {
+                            // No closing tag — emit rest of SQL as-is
+                            result.push_str(&rest);
+                            i = len;
+                        }
+                        continue;
+                    }
+                    // Not a dollar quote — emit the $ and continue
                     result.push('$');
-                    result.push('$');
-                    i += 2;
-                    state = State::InDollarQuote;
+                    i += 1;
                     continue;
                 }
 
@@ -136,10 +160,10 @@ pub fn substitute_ids<'a>(sql: &'a str, map: &DashMap<String, String>) -> (Cow<'
                     continue;
                 }
 
-                // Alphabetic: could be a keyword
-                if ch.is_ascii_alphabetic() || ch == '_' {
+                // Alphabetic: could be a keyword (Unicode-aware for international identifiers)
+                if ch.is_alphabetic() || ch == '_' {
                     let word_start = i;
-                    while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
                         result.push(chars[i]);
                         i += 1;
                     }
@@ -248,17 +272,6 @@ pub fn substitute_ids<'a>(sql: &'a str, map: &DashMap<String, String>) -> (Cow<'
                 }
             }
 
-            State::InDollarQuote => {
-                result.push(chars[i]);
-                if chars[i] == '$' && i + 1 < len && chars[i + 1] == '$' {
-                    result.push('$');
-                    i += 2;
-                    state = State::Normal;
-                } else {
-                    i += 1;
-                }
-            }
-
             State::InNumericLiteral => {
                 // Accumulate the full numeric literal
                 let num_start = i;
@@ -280,8 +293,22 @@ pub fn substitute_ids<'a>(sql: &'a str, map: &DashMap<String, String>) -> (Cow<'
 
                     if should_substitute {
                         if let Some(replacement) = map.get(&num_str) {
-                            result.push_str(replacement.value());
-                            count += 1;
+                            // Only substitute if the replacement looks like a valid numeric value
+                            let is_safe = replacement.value().chars().all(|c| {
+                                c.is_ascii_digit()
+                                    || c == '.'
+                                    || c == '-'
+                                    || c == 'e'
+                                    || c == 'E'
+                                    || c == '+'
+                            });
+                            if is_safe {
+                                result.push_str(replacement.value());
+                                count += 1;
+                            } else {
+                                // Unsafe replacement value — skip substitution, emit original
+                                result.push_str(&num_str);
+                            }
                         } else {
                             result.push_str(&num_str);
                         }
@@ -461,5 +488,22 @@ mod tests {
         let (r, _) = substitute_ids(sql, &map);
         assert!(r.contains("LIMIT 5"));
         assert!(r.contains("= 1001"));
+    }
+
+    #[test]
+    fn test_numeric_substitution_rejects_injection() {
+        // A replacement value with SQL injection should be rejected
+        let map = make_map(&[("42", "1; DROP TABLE users")]);
+        let (r, c) = substitute_ids("SELECT * FROM t WHERE id = 42", &map);
+        assert_eq!(r, "SELECT * FROM t WHERE id = 42");
+        assert_eq!(c, 0);
+    }
+
+    #[test]
+    fn test_tagged_dollar_quote() {
+        let map = make_map(&[("42", "1001")]);
+        let (r, c) = substitute_ids("SELECT $fn$contains 42$fn$", &map);
+        assert_eq!(r, "SELECT $fn$contains 42$fn$");
+        assert_eq!(c, 0);
     }
 }

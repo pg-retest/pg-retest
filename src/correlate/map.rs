@@ -30,6 +30,16 @@ impl IdMap {
     }
 
     pub fn register(&self, captured: String, replayed: String) {
+        if let Some(existing) = self.inner.get(&captured) {
+            if existing.value() != &replayed {
+                tracing::debug!(
+                    "ID map overwrite: '{}' was '{}', now '{}'",
+                    captured,
+                    existing.value(),
+                    replayed
+                );
+            }
+        }
         self.inner.insert(captured, replayed);
     }
 

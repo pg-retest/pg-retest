@@ -413,6 +413,11 @@ pub fn extract_data_row(msg: &PgMessage, num_columns: usize) -> Option<Vec<Optio
     }
     let num_cols = u16::from_be_bytes([body[0], body[1]]) as usize;
     if num_cols != num_columns {
+        tracing::debug!(
+            "DataRow column count mismatch: expected {}, got {} — skipping row",
+            num_columns,
+            num_cols
+        );
         return None;
     }
     let mut values = Vec::with_capacity(num_cols);
