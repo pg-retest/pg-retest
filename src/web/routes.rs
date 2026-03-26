@@ -1,4 +1,5 @@
 use axum::{
+    extract::DefaultBodyLimit,
     middleware,
     routing::{delete, get, post},
     Router,
@@ -119,5 +120,8 @@ pub fn build_router(state: AppState, auth_token: Option<String>) -> Router {
 
     let api = Router::new().merge(public_api).merge(protected_api);
 
-    Router::new().nest("/api/v1", api).with_state(state)
+    Router::new()
+        .nest("/api/v1", api)
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB upload limit
+        .with_state(state)
 }

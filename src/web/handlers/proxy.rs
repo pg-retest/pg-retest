@@ -2,6 +2,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
@@ -22,6 +23,10 @@ pub struct ProxyState {
     pub total_queries: u64,
     pub active_sessions: u64,
     pub capture_cmd_tx: Option<mpsc::UnboundedSender<CaptureCommand>>,
+    /// Direct handle to the proxy's no_capture flag for managed (in-process) proxies.
+    /// When set, toggle_capture can flip this directly instead of relying solely on the
+    /// CaptureCommand channel, which may not be ready if the proxy is still initializing.
+    pub no_capture: Option<Arc<AtomicBool>>,
     pub capturing: bool,
     pub capture_id: Option<String>,
     pub capture_history: Vec<serde_json::Value>,
@@ -83,6 +88,9 @@ pub async fn start_proxy(
     let output_id = uuid::Uuid::new_v4().to_string();
     let output_path = output_dir.join(format!("proxy-{output_id}.wkl"));
 
+    // Create a shared no_capture flag that the managed proxy and toggle handler can both access.
+    let shared_no_capture = Arc::new(AtomicBool::new(true));
+
     let config = crate::proxy::ProxyConfig {
         listen_addr: req.listen.clone(),
         target_addr: req.target.clone(),
@@ -102,6 +110,7 @@ pub async fn start_proxy(
         id_capture_implicit: false,
         pk_map: None,
         no_stealth: false,
+        shared_no_capture: Some(shared_no_capture.clone()),
     };
 
     let listen = req.listen.clone();
@@ -111,10 +120,11 @@ pub async fn start_proxy(
     // Create capture command channel for multi-capture mode
     let (capture_cmd_tx, capture_cmd_rx) = mpsc::unbounded_channel::<CaptureCommand>();
 
-    // Store the sender in proxy state so toggle_capture can use it
+    // Store the sender and shared no_capture handle in proxy state
     {
         let mut ps = proxy_state().write().await;
         ps.capture_cmd_tx = Some(capture_cmd_tx);
+        ps.no_capture = Some(shared_no_capture);
     }
 
     let task_id = state
@@ -201,6 +211,7 @@ pub async fn start_proxy(
                         ps.running = false;
                         ps.task_id = None;
                         ps.capture_cmd_tx = None;
+                        ps.no_capture = None;
                         ps.capturing = false;
                         ps.capture_id = None;
                     }
@@ -402,6 +413,7 @@ pub async fn toggle_capture(State(state): State<AppState>) -> Json<serde_json::V
         Some(tx) => tx.clone(),
         None => return Json(json!({ "error": "Proxy not configured for capture" })),
     };
+    let no_capture_flag = ps.no_capture.clone();
     let currently_capturing = ps.capturing;
     drop(ps);
 
@@ -409,11 +421,14 @@ pub async fn toggle_capture(State(state): State<AppState>) -> Json<serde_json::V
         // --- Start capturing ---
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         if tx.send(CaptureCommand::Start { reply: reply_tx }).is_err() {
-            return Json(json!({ "error": "Proxy not responding" }));
+            return Json(
+                json!({ "error": "Proxy command channel closed — proxy may have stopped" }),
+            );
         }
 
-        match reply_rx.await {
-            Ok(Ok(capture_id)) => {
+        // Use a timeout to avoid hanging if the proxy's command loop hasn't started yet
+        match tokio::time::timeout(Duration::from_secs(10), reply_rx).await {
+            Ok(Ok(Ok(capture_id))) => {
                 // Update proxy state
                 {
                     let mut ps = proxy_state().write().await;
@@ -425,8 +440,44 @@ pub async fn toggle_capture(State(state): State<AppState>) -> Json<serde_json::V
                     "capture_id": capture_id,
                 }))
             }
-            Ok(Err(e)) => Json(json!({ "error": e })),
-            Err(_) => Json(json!({ "error": "Proxy not responding" })),
+            Ok(Ok(Err(e))) => Json(json!({ "error": e })),
+            Ok(Err(_)) => {
+                // Oneshot sender was dropped — proxy command loop exited.
+                // Fall back to direct no_capture toggle if we have the shared flag.
+                if let Some(ref flag) = no_capture_flag {
+                    flag.store(false, Ordering::Relaxed);
+                    let capture_id = uuid::Uuid::new_v4().to_string();
+                    let mut ps = proxy_state().write().await;
+                    ps.capturing = true;
+                    ps.capture_id = Some(capture_id.clone());
+                    Json(json!({
+                        "capturing": true,
+                        "capture_id": capture_id,
+                        "fallback": true,
+                    }))
+                } else {
+                    Json(
+                        json!({ "error": "Proxy not responding and no direct capture handle available" }),
+                    )
+                }
+            }
+            Err(_timeout) => {
+                // Timed out waiting for reply — fall back to direct toggle
+                if let Some(ref flag) = no_capture_flag {
+                    flag.store(false, Ordering::Relaxed);
+                    let capture_id = uuid::Uuid::new_v4().to_string();
+                    let mut ps = proxy_state().write().await;
+                    ps.capturing = true;
+                    ps.capture_id = Some(capture_id.clone());
+                    Json(json!({
+                        "capturing": true,
+                        "capture_id": capture_id,
+                        "fallback": true,
+                    }))
+                } else {
+                    Json(json!({ "error": "Proxy not responding (timeout)" }))
+                }
+            }
         }
     } else {
         // --- Stop capturing ---
@@ -444,11 +495,20 @@ pub async fn toggle_capture(State(state): State<AppState>) -> Json<serde_json::V
             })
             .is_err()
         {
-            return Json(json!({ "error": "Proxy not responding" }));
+            // Channel closed — disable capture directly if possible
+            if let Some(ref flag) = no_capture_flag {
+                flag.store(true, Ordering::Relaxed);
+            }
+            let mut ps = proxy_state().write().await;
+            ps.capturing = false;
+            ps.capture_id = None;
+            return Json(
+                json!({ "error": "Proxy command channel closed — capture disabled directly" }),
+            );
         }
 
-        match reply_rx.await {
-            Ok(Ok(result)) => {
+        match tokio::time::timeout(Duration::from_secs(30), reply_rx).await {
+            Ok(Ok(Ok(result))) => {
                 let total_sessions = result["total_sessions"].as_u64().unwrap_or(0);
                 let total_queries = result["total_queries"].as_u64().unwrap_or(0);
                 let capture_id = result["capture_id"].as_str().unwrap_or("").to_string();
@@ -505,14 +565,23 @@ pub async fn toggle_capture(State(state): State<AppState>) -> Json<serde_json::V
                     "output": output_path.to_string_lossy(),
                 }))
             }
-            Ok(Err(e)) => {
+            Ok(Ok(Err(e))) => {
                 // Reset capturing state on error
                 let mut ps = proxy_state().write().await;
                 ps.capturing = false;
                 ps.capture_id = None;
                 Json(json!({ "error": e }))
             }
-            Err(_) => Json(json!({ "error": "Proxy not responding" })),
+            Ok(Err(_)) | Err(_) => {
+                // Oneshot dropped or timeout — disable capture directly
+                if let Some(ref flag) = no_capture_flag {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                let mut ps = proxy_state().write().await;
+                ps.capturing = false;
+                ps.capture_id = None;
+                Json(json!({ "error": "Proxy not responding — capture disabled directly" }))
+            }
         }
     }
 }

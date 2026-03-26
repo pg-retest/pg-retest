@@ -59,6 +59,9 @@ pub struct ProxyConfig {
     /// Disable stealth mode: forward auto-injected RETURNING results to client.
     /// When false (default), injected RETURNING results are suppressed.
     pub no_stealth: bool,
+    /// Optional shared AtomicBool for the managed proxy's no_capture flag.
+    /// When provided, the web toggle handler can read/verify capture state directly.
+    pub shared_no_capture: Option<Arc<AtomicBool>>,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -703,8 +706,14 @@ async fn run_proxy_managed_multi(
         config.pool_timeout_secs,
     ));
 
-    // Shared no_capture flag — starts true (no capture until Start command)
-    let no_capture = Arc::new(AtomicBool::new(true));
+    // Shared no_capture flag — starts true (no capture until Start command).
+    // Use the shared handle from config if provided (allows the web toggle handler
+    // to verify capture state directly), otherwise create a local one.
+    let no_capture = config
+        .shared_no_capture
+        .clone()
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
+    no_capture.store(true, Ordering::Relaxed);
 
     // Open staging DB in the output directory (or a temp location)
     let staging_path = config
