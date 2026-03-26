@@ -41,6 +41,12 @@ pub fn build_router(state: AppState, auth_token: Option<String>) -> Router {
             "/workloads/{id}/compile",
             post(handlers::workloads::compile_workload),
         )
+        .route(
+            "/workloads/{id}/synthesize",
+            post(handlers::workloads::synthesize_workload),
+        )
+        // Drift Check
+        .route("/drift-check", post(handlers::drift::drift_check))
         // Proxy
         .route("/proxy/status", get(handlers::proxy::proxy_status))
         .route("/proxy/start", post(handlers::proxy::start_proxy))

@@ -73,6 +73,12 @@ const api = {
     validatePipeline(config) { return this.post('/pipeline/validate', config); },
     getPipeline(id) { return this.get(`/pipeline/${id}`); },
 
+    // Synthesize
+    synthesizeWorkload(id, config) { return this.post(`/workloads/${id}/synthesize`, config); },
+
+    // Drift Check
+    driftCheck(config) { return this.post('/drift-check', config); },
+
     // Runs
     listRuns(params = {}) {
         const qs = new URLSearchParams(params).toString();

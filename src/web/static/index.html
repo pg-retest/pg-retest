@@ -176,6 +176,10 @@
                 <div x-show="page === 'transform'" x-data="transformPage()" x-init="load()" x-effect="if ($store.app.page === 'transform') load()">
                     <div id="transform-content"></div>
                 </div>
+                <!-- Drift Check -->
+                <div x-show="page === 'drift'" x-data="driftPage()" x-init="load()" x-effect="if ($store.app.page === 'drift') load()">
+                    <div id="drift-content"></div>
+                </div>
                 <!-- History -->
                 <div x-show="page === 'history'" x-data="historyPage()" x-init="load()" x-effect="if ($store.app.page === 'history') load()">
                     <div id="history-content"></div>
@@ -205,6 +209,7 @@
     <script src="/js/pages/pipeline.js"></script>
     <script src="/js/pages/transform.js"></script>
     <script src="/js/pages/tuning.js"></script>
+    <script src="/js/pages/drift.js"></script>
     <script src="/js/pages/history.js"></script>
     <script src="/js/pages/help.js"></script>
     <script src="/js/app.js"></script>
