@@ -9,7 +9,7 @@
 
 Capture, replay, and compare PostgreSQL workloads. Validate configuration changes, server migrations, capacity planning, and cross-database migrations with confidence.
 
-> **Important:** pg-retest is a workload simulation tool, not a replication system. Replay produces a high-fidelity approximation of your production traffic (93-96% accuracy for write workloads with `--id-mode=full`, near-100% for read-only), but it is **not** guaranteed to produce byte-identical results. The 4-7% error rate in write workloads comes from concurrent session sequence ordering — the same fundamental limitation Oracle RAT documents as "replay divergence." Use pg-retest to answer "will my workload perform the same on the new target?" — not "will my data be identical." See [Expected Error Rates](docs/id-correlation.md#expected-error-rates) for detailed benchmarks.
+> **Important:** pg-retest is a workload simulation tool, not a replication system. Replay produces a high-fidelity approximation of your production traffic (93-96% accuracy for write workloads with `--id-mode=full`, near-100% for read-only), but it is **not** guaranteed to produce byte-identical results. The 4-7% error rate in write workloads comes from concurrent session sequence ordering — the same fundamental limitation Oracle RAT documents as "replay divergence." Use pg-retest to answer "will my workload perform the same on the new target?" — not "will my data be identical." See [Replay Accuracy & Fidelity](docs/replay-accuracy.md) for detailed benchmarks and per-mode analysis.
 
 ---
 
@@ -512,6 +512,8 @@ pg-retest replay \
 
 For the full production workflow — including proxy deployment, PITR restore, and iterative testing loops — see the [Production Workflow Guide](docs/production-workflow.md).
 
+For detailed accuracy data by ID type and mode, see [Replay Accuracy & Fidelity](docs/replay-accuracy.md).
+
 See [docs/id-correlation.md](docs/id-correlation.md) for detailed usage, driver compatibility, and known limitations.
 
 ### Transaction-Aware Replay
@@ -919,6 +921,7 @@ User guides are available in the `docs/` directory:
 - `docs/demo.md` -- Docker demo environment setup and walkthrough
 - `docs/tuning.md` -- AI-assisted tuning guide
 - `docs/transform.md` -- AI-powered workload transform guide
+- `docs/replay-accuracy.md` -- Replay accuracy and fidelity reference (per-mode benchmarks, ID type analysis)
 
 Design documents and implementation plans:
 
