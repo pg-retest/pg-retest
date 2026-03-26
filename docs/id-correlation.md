@@ -12,6 +12,34 @@ Replay:   INSERT INTO orders (...) RETURNING id   →  id=1001 (sequence diverge
 Replay:   SELECT * FROM orders WHERE id = 42      ←  0 rows (should be 1001)
 ```
 
+## The `compile` Subcommand
+
+After capturing a workload with `--id-mode=correlate` or `--id-mode=full`, you can pre-resolve all ID references into the workload file itself using `pg-retest compile`:
+
+```bash
+pg-retest compile \
+  --input workload.wkl \
+  --output workload-compiled.wkl
+```
+
+The compiled workload:
+- Strips all `response_values` from queries (reduces file size)
+- Audits every query for references to captured IDs and reports statistics
+- Sets `capture_method` to `proxy+compiled` so the replay engine auto-detects and resets sequences without requiring an explicit `--id-mode` flag
+
+**When to use `compile`:**
+- Before checking a workload into CI/CD pipelines (IDs are pre-resolved — no runtime map needed)
+- When replaying repeatedly against a PITR-restored target (deterministic, no ID drift)
+- When sharing workloads with teammates who should not need to think about ID modes
+
+**Dry-run mode** shows stats without writing output:
+
+```bash
+pg-retest compile --input workload.wkl --output workload-compiled.wkl --dry-run
+```
+
+**PITR workflow:** For the recommended production workflow — including auto restore point creation, PITR restore, and iterative replay loops — see the [Production Workflow Guide](production-workflow.md).
+
 ## ID Handling Modes
 
 pg-retest provides four ID handling modes via the `--id-mode` flag:
@@ -314,7 +342,7 @@ Latency comparisons in read-only mode are valid for the query execution engine b
 
 **`--id-capture-implicit` modifies queries sent to the database.** When enabled, the proxy appends `RETURNING <pk_columns>` to bare INSERT statements. The PostgreSQL server sends back extra RowDescription and DataRow messages that the client application did not request.
 
-**Stealth mode (enabled by default) mitigates this risk.** The proxy captures the RETURNING data for the ID map but strips the RowDescription and DataRow messages before forwarding to the client. The client sees only CommandComplete + ReadyForQuery — exactly the same response as a bare INSERT without RETURNING. This makes `--id-capture-implicit` safe for all drivers and ORMs listed below.
+**Stealth mode (enabled by default) mitigates this risk.** The proxy captures the RETURNING data for the ID map but strips the RowDescription and DataRow messages before forwarding to the client. The client sees only CommandComplete + ReadyForQuery — exactly the same response as a bare INSERT without RETURNING. This makes `--id-capture-implicit` safe for all drivers and ORMs listed below, with no application configuration changes required.
 
 **If stealth mode is disabled** (`--no-stealth`), the raw RETURNING results are forwarded to the client, which may cause compatibility issues with some drivers. The risk table below applies only when `--no-stealth` is used.
 
