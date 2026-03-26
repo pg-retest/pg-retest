@@ -2,6 +2,8 @@
 
 This guide covers the practical steps for using pg-retest against real production PostgreSQL databases. It assumes you have pg-retest installed and are familiar with the basic capture/replay/compare cycle from the [README](../README.md).
 
+> **New to pg-retest?** Start with the [Golden Path Demo Guide](golden-path-demo.md) for a complete end-to-end CLI walkthrough — from capturing traffic to running a synthetic benchmark.
+
 ## The Key Insight
 
 You never stop production to capture. The pg-retest proxy slides into your infrastructure transparently -- applications keep running, users see no difference, and you get a complete recording of real traffic.

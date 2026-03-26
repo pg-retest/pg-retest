@@ -924,10 +924,26 @@ cargo fmt
 
 ---
 
+## Demo
+
+For a hands-on, step-by-step walkthrough of the complete pg-retest workflow — from capturing production traffic through proxy, to replaying against a restored target, to generating a synthetic benchmark — see the **[Golden Path Demo Guide](docs/golden-path-demo.md)**.
+
+To try pg-retest without any setup, use the Docker demo environment instead:
+
+```bash
+docker compose up --build
+# Open http://localhost:8080 — click "Demo" in the sidebar
+```
+
+See the [Demo Environment Guide](docs/demo.md) for Docker demo details.
+
+---
+
 ## Documentation
 
 User guides are available in the `docs/` directory:
 
+- `docs/golden-path-demo.md` -- End-to-end CLI walkthrough (capture, replay, compare, synthetic benchmark)
 - `docs/demo.md` -- Docker demo environment setup and walkthrough
 - `docs/tuning.md` -- AI-assisted tuning guide
 - `docs/transform.md` -- AI-powered workload transform guide
