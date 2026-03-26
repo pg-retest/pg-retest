@@ -1,7 +1,7 @@
 # pg-retest
 
 ![Rust](https://img.shields.io/badge/language-Rust-orange?logo=rust)
-![Version](https://img.shields.io/badge/version-1.0.0--rc.1-green)
+![Version](https://img.shields.io/badge/version-1.0.0--rc.2-green)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-336791?logo=postgresql&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-323-brightgreen)
 ![Clippy](https://img.shields.io/badge/clippy-zero%20warnings-brightgreen)
