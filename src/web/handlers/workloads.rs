@@ -214,6 +214,73 @@ pub async fn upload_workload(
     Ok(Json(json!({ "id": id, "workload": row })))
 }
 
+/// POST /api/v1/workloads/{id}/compile
+/// Compiles a workload: strips response_values, validates IDs, produces a deterministic .wkl
+pub async fn compile_workload(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // 1. Get the workload metadata from SQLite
+    let db = state.db.lock().await;
+    let workload = match crate::web::db::get_workload(&db, &id) {
+        Ok(Some(w)) => w,
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+    drop(db);
+
+    // 2. Load the profile from disk
+    let path = std::path::Path::new(&workload.file_path);
+    let profile =
+        crate::profile::io::read_profile(path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // 3. Compile the workload
+    let (compiled, stats) = crate::correlate::compile::compile_workload(profile).map_err(|e| {
+        tracing::warn!("Compile failed for workload {}: {}", id, e);
+        StatusCode::BAD_REQUEST
+    })?;
+
+    // 4. Write the compiled profile to a new file
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let wkl_dir = state.data_dir.join("workloads");
+    std::fs::create_dir_all(&wkl_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let compiled_path = wkl_dir.join(format!("{new_id}.wkl"));
+    crate::profile::io::write_profile(&compiled_path, &compiled)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // 5. Import the compiled workload into SQLite
+    let classification = crate::classify::classify_workload(&compiled);
+    let compiled_name = format!("{}-compiled", workload.name);
+
+    let row = crate::web::db::WorkloadRow {
+        id: new_id.clone(),
+        name: compiled_name,
+        file_path: compiled_path.to_string_lossy().to_string(),
+        source_type: Some(compiled.capture_method.clone()),
+        source_host: Some(compiled.source_host.clone()),
+        captured_at: Some(compiled.captured_at.to_rfc3339()),
+        total_sessions: Some(compiled.metadata.total_sessions as i64),
+        total_queries: Some(compiled.metadata.total_queries as i64),
+        capture_duration_us: Some(compiled.metadata.capture_duration_us as i64),
+        classification: Some(serde_json::to_string(&classification).unwrap_or_default()),
+        created_at: None,
+    };
+
+    let db = state.db.lock().await;
+    crate::web::db::insert_workload(&db, &row).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(json!({
+        "id": new_id,
+        "workload": row,
+        "stats": {
+            "queries_with_responses": stats.queries_with_responses,
+            "unique_captured_ids": stats.unique_captured_ids,
+            "queries_referencing_ids": stats.queries_referencing_ids,
+            "total_id_references": stats.total_id_references,
+        }
+    })))
+}
+
 /// DELETE /api/v1/workloads/:id
 pub async fn delete_workload(
     State(state): State<AppState>,

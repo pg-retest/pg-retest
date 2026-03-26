@@ -87,6 +87,7 @@ function workloadsPage() {
                 { label: '', render: r => `
                     <div class="flex gap-1">
                         <button class="btn btn-secondary btn-sm" onclick="inspectWorkload('${r.id}')">Inspect</button>
+                        ${r.source_type === 'proxy' ? `<button class="btn btn-secondary btn-sm" id="compile-btn-${r.id}" onclick="compileWorkload('${r.id}')">Compile</button>` : ''}
                         <button class="btn btn-danger btn-sm" onclick="deleteWorkload('${r.id}')">Delete</button>
                     </div>
                 `},
@@ -233,6 +234,34 @@ async function inspectWorkload(id) {
 
 function closeDetailModal() {
     document.getElementById('detail-modal').classList.add('hidden');
+}
+
+async function compileWorkload(id) {
+    const btn = document.getElementById(`compile-btn-${id}`);
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="animate-spin inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full"></span>';
+    }
+
+    const res = await api.compileWorkload(id);
+    if (res.error) {
+        window.showToast(res.error, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Compile';
+        }
+    } else {
+        const stats = res.stats || {};
+        window.showToast(
+            `Compiled: ${stats.queries_with_responses} queries with responses, ` +
+            `${stats.unique_captured_ids} unique IDs, ` +
+            `${stats.queries_referencing_ids} referencing queries`,
+            'success'
+        );
+        // Reload workloads list to show the new compiled workload
+        const page = Alpine.$data(document.querySelector('[x-data="workloadsPage()"]'));
+        if (page) page.load();
+    }
 }
 
 async function deleteWorkload(id) {
