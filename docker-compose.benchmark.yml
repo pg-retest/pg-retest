@@ -20,7 +20,7 @@ services:
       - wal-archive-a:/var/lib/postgresql/wal_archive
       - base-backup-a:/backups
     ports:
-      - "5450:5432"
+      - "${PG_RETEST_DB_A_PORT:-5450}:5432"
     command:
       - postgres
       - -c
@@ -47,7 +47,7 @@ services:
       - ./demo/init-db-a.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./demo/init-benchmark.sql:/docker-entrypoint-initdb.d/02-benchmark.sql
     ports:
-      - "5451:5432"
+      - "${PG_RETEST_DB_B_PORT:-5451}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U demo -d ecommerce"]
       interval: 3s
@@ -72,7 +72,7 @@ services:
       - ./demo/pitr-restore.sh:/pitr-restore.sh:ro
       - pitr-data:/var/lib/postgresql/data
     ports:
-      - "5452:5432"
+      - "${PG_RETEST_DB_B_PITR_PORT:-5452}:5432"
     environment:
       RESTORE_POINT: "${RESTORE_POINT:-}"
     entrypoint: ["/bin/bash", "/pitr-restore.sh"]

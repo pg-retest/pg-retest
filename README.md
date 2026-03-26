@@ -67,6 +67,14 @@ The demo environment includes two PostgreSQL 16 databases seeded with a 94k-row 
 docker compose down -v
 ```
 
+**Troubleshooting: Port conflicts**
+
+If `docker compose up` fails with "port already allocated", override the default ports:
+
+```bash
+PG_RETEST_WEB_PORT=9090 PG_RETEST_DB_A_PORT=5460 PG_RETEST_DB_B_PORT=5461 docker compose up -d
+```
+
 See the [Demo Environment Guide](docs/demo.md) for full details, CLI examples, and troubleshooting.
 
 ### Prerequisites
@@ -108,6 +116,8 @@ pg-retest compare \
   --json report.json \
   --fail-on-regression
 ```
+
+> **Tip:** For write workloads, add `--id-mode=full` to handle database-generated ID divergence. See [ID Correlation](docs/id-correlation.md) for details.
 
 ### Other Quick Commands
 
