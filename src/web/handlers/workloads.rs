@@ -56,17 +56,36 @@ pub async fn inspect_workload(
     };
     drop(db);
 
+    // Start with metadata from SQLite (always available)
+    let mut result = json!({
+        "id": workload.id,
+        "name": workload.name,
+        "source_type": workload.source_type,
+        "source_host": workload.source_host,
+        "captured_at": workload.captured_at,
+        "total_sessions": workload.total_sessions,
+        "total_queries": workload.total_queries,
+        "capture_duration_us": workload.capture_duration_us,
+        "classification": workload.classification,
+    });
+
+    // Try to load the full profile from disk for detailed inspection
     let path = std::path::Path::new(&workload.file_path);
-    match crate::profile::io::read_profile(path) {
-        Ok(profile) => {
+    if path.exists() {
+        if let Ok(profile) = crate::profile::io::read_profile(path) {
             let classification = crate::classify::classify_workload(&profile);
-            Ok(Json(json!({
-                "profile": profile,
-                "classification": classification,
-            })))
+            // Merge profile data — these take precedence over SQLite metadata
+            result["total_sessions"] = json!(profile.metadata.total_sessions);
+            result["total_queries"] = json!(profile.metadata.total_queries);
+            result["capture_method"] = json!(profile.capture_method);
+            result["capture_duration_us"] = json!(profile.metadata.capture_duration_us);
+            result["source_host"] = json!(profile.source_host);
+            result["profile"] = json!(profile);
+            result["classification"] = json!(classification);
         }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+
+    Ok(Json(result))
 }
 
 /// POST /api/v1/workloads/import — Import an existing .wkl file
