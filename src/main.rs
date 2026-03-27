@@ -559,6 +559,8 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         pk_map,
         no_stealth: args.no_stealth,
         shared_no_capture: None,
+        listen_backlog: args.listen_backlog,
+        connect_timeout_secs: args.connect_timeout,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

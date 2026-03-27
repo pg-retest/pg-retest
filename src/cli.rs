@@ -330,6 +330,14 @@ pub struct ProxyArgs {
     /// Register all differing RETURNING column values (not just integers/UUIDs)
     #[arg(long, default_value_t = false)]
     pub id_correlate_all_columns: bool,
+
+    /// TCP listen backlog size (default 1024)
+    #[arg(long, default_value_t = 1024)]
+    pub listen_backlog: u32,
+
+    /// Timeout in seconds for connecting to the target database (default 5)
+    #[arg(long, default_value_t = 5)]
+    pub connect_timeout: u64,
 }
 
 #[derive(clap::Args)]

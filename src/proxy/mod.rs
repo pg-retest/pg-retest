@@ -4,6 +4,7 @@ pub mod control;
 pub mod listener;
 pub mod pool;
 pub mod protocol;
+pub mod socket;
 pub mod staging;
 
 use std::path::PathBuf;
@@ -62,6 +63,10 @@ pub struct ProxyConfig {
     /// Optional shared AtomicBool for the managed proxy's no_capture flag.
     /// When provided, the web toggle handler can read/verify capture state directly.
     pub shared_no_capture: Option<Arc<AtomicBool>>,
+    /// TCP listen backlog size (default 1024).
+    pub listen_backlog: u32,
+    /// Connect timeout in seconds when opening connections to the target (default 5).
+    pub connect_timeout_secs: u64,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -83,11 +88,12 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         return run_proxy_persistent(config).await;
     }
 
-    let listener = TcpListener::bind(&config.listen_addr).await?;
+    let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
     let pool = Arc::new(SessionPool::new(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
+        config.connect_timeout_secs,
     ));
 
     let (capture_tx, capture_rx) = mpsc::unbounded_channel();
@@ -200,11 +206,12 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
 
 /// Run the proxy in persistent mode (stays running, capture controlled via HTTP).
 async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
-    let listener = TcpListener::bind(&config.listen_addr).await?;
+    let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
     let pool = Arc::new(SessionPool::new(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
+        config.connect_timeout_secs,
     ));
 
     // Shared no_capture flag — starts as true (no capture until start-capture is called)
@@ -609,11 +616,12 @@ pub async fn run_proxy_managed(
     }
 
     // ---------- Legacy single-capture path ----------
-    let listener = TcpListener::bind(&config.listen_addr).await?;
+    let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
     let pool = Arc::new(SessionPool::new(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
+        config.connect_timeout_secs,
     ));
 
     let (capture_tx, capture_rx) = mpsc::unbounded_channel();
@@ -699,11 +707,12 @@ async fn run_proxy_managed_multi(
     metrics_tx: mpsc::UnboundedSender<CaptureEvent>,
     mut cmd_rx: mpsc::UnboundedReceiver<CaptureCommand>,
 ) -> Result<Option<WorkloadProfile>> {
-    let listener = TcpListener::bind(&config.listen_addr).await?;
+    let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
     let pool = Arc::new(SessionPool::new(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
+        config.connect_timeout_secs,
     ));
 
     // Shared no_capture flag — starts true (no capture until Start command).

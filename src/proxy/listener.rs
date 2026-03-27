@@ -4,11 +4,12 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::capture::CaptureEvent;
 use super::connection::{handle_connection, CorrelateState, ImplicitCaptureState};
 use super::pool::SessionPool;
+use super::socket;
 
 /// Run the TCP accept loop.
 pub async fn run_listener(
@@ -26,6 +27,12 @@ pub async fn run_listener(
 
     loop {
         let (client_stream, peer_addr) = listener.accept().await?;
+
+        // Apply socket hardening (keepalive, nodelay) to client connection
+        if let Err(e) = socket::configure_socket(&client_stream) {
+            warn!("Failed to configure client socket from {peer_addr}: {e}");
+        }
+
         let session_id = session_counter.fetch_add(1, Ordering::Relaxed);
         let pool = pool.clone();
         let capture_tx = capture_tx.clone();

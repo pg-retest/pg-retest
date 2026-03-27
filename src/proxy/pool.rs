@@ -6,6 +6,8 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{timeout, Duration};
 use tracing::debug;
 
+use super::socket;
+
 /// A pooled server connection.
 pub struct ServerConn {
     pub stream: TcpStream,
@@ -18,6 +20,7 @@ pub struct SessionPool {
     target: String,
     max_size: usize,
     pool_timeout: Duration,
+    connect_timeout_secs: u64,
     inner: Mutex<PoolInner>,
     notify: Notify,
 }
@@ -29,11 +32,17 @@ struct PoolInner {
 }
 
 impl SessionPool {
-    pub fn new(target: String, max_size: usize, pool_timeout_secs: u64) -> Self {
+    pub fn new(
+        target: String,
+        max_size: usize,
+        pool_timeout_secs: u64,
+        connect_timeout_secs: u64,
+    ) -> Self {
         Self {
             target,
             max_size,
             pool_timeout: Duration::from_secs(pool_timeout_secs),
+            connect_timeout_secs,
             inner: Mutex::new(PoolInner {
                 idle: VecDeque::new(),
                 active_count: 0,
@@ -79,7 +88,9 @@ impl SessionPool {
                     );
                     drop(inner); // Release lock before connecting
 
-                    let stream = TcpStream::connect(&self.target).await?;
+                    let stream =
+                        socket::connect_with_timeout(&self.target, self.connect_timeout_secs)
+                            .await?;
                     return Ok(ServerConn { stream, id });
                 }
             }

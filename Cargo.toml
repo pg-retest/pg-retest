@@ -45,6 +45,7 @@ rustls = "0.23"
 rustls-pemfile = "2"
 rustls-native-certs = "0.8"
 dashmap = "6"
+socket2 = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

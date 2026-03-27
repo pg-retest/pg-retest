@@ -111,6 +111,8 @@ pub async fn start_proxy(
         pk_map: None,
         no_stealth: false,
         shared_no_capture: Some(shared_no_capture.clone()),
+        listen_backlog: 1024,
+        connect_timeout_secs: 5,
     };
 
     let listen = req.listen.clone();
