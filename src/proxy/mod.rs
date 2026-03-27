@@ -73,6 +73,16 @@ pub struct ProxyConfig {
     pub server_timeout_secs: u64,
     /// Auth/login timeout in seconds (default 30). 0 = no timeout.
     pub auth_timeout_secs: u64,
+    /// Maximum lifetime of a server connection in seconds (default 3600).
+    /// Connections older than this are discarded on checkin. 0 = unlimited.
+    pub server_lifetime_secs: u64,
+    /// Maximum idle time for pooled connections in seconds (default 600).
+    /// A background reaper closes connections idle longer than this. 0 = no reaping.
+    pub server_idle_timeout_secs: u64,
+    /// Idle-in-transaction warning threshold in seconds (default 0 = disabled).
+    /// Logs a warning when a connection appears idle-in-transaction beyond this threshold.
+    /// Does NOT forcibly close the connection.
+    pub idle_transaction_timeout_secs: u64,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -90,10 +100,11 @@ fn build_implicit_capture_state(config: &ProxyConfig) -> Option<Arc<ImplicitCapt
 
 /// Build a `TimeoutConfig` from the proxy config.
 fn build_timeout_config(config: &ProxyConfig) -> TimeoutConfig {
-    TimeoutConfig::from_secs(
+    TimeoutConfig::from_secs_full(
         config.client_timeout_secs,
         config.server_timeout_secs,
         config.auth_timeout_secs,
+        config.idle_transaction_timeout_secs,
     )
 }
 
@@ -104,12 +115,17 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     }
 
     let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
-    let pool = Arc::new(SessionPool::new(
+    let pool = Arc::new(SessionPool::with_lifecycle(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
         config.connect_timeout_secs,
+        config.server_lifetime_secs,
+        config.server_idle_timeout_secs,
     ));
+
+    // Spawn idle reaper if configured
+    let _reaper_handle = pool.spawn_idle_reaper(CancellationToken::new());
 
     let (capture_tx, capture_rx) = mpsc::unbounded_channel();
 
@@ -224,12 +240,17 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
 /// Run the proxy in persistent mode (stays running, capture controlled via HTTP).
 async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
-    let pool = Arc::new(SessionPool::new(
+    let pool = Arc::new(SessionPool::with_lifecycle(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
         config.connect_timeout_secs,
+        config.server_lifetime_secs,
+        config.server_idle_timeout_secs,
     ));
+
+    // Spawn idle reaper if configured
+    let _reaper_handle = pool.spawn_idle_reaper(CancellationToken::new());
 
     // Shared no_capture flag — starts as true (no capture until start-capture is called)
     let no_capture = Arc::new(AtomicBool::new(true));
@@ -636,12 +657,18 @@ pub async fn run_proxy_managed(
 
     // ---------- Legacy single-capture path ----------
     let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
-    let pool = Arc::new(SessionPool::new(
+    let pool = Arc::new(SessionPool::with_lifecycle(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
         config.connect_timeout_secs,
+        config.server_lifetime_secs,
+        config.server_idle_timeout_secs,
     ));
+
+    // Spawn idle reaper — cancelled when the pool is dropped or proxy shuts down
+    let reaper_cancel = cancel_token.clone();
+    let _reaper_handle = pool.spawn_idle_reaper(reaper_cancel);
 
     let (capture_tx, capture_rx) = mpsc::unbounded_channel();
 
@@ -729,12 +756,18 @@ async fn run_proxy_managed_multi(
     mut cmd_rx: mpsc::UnboundedReceiver<CaptureCommand>,
 ) -> Result<Option<WorkloadProfile>> {
     let listener = socket::create_listener(&config.listen_addr, config.listen_backlog).await?;
-    let pool = Arc::new(SessionPool::new(
+    let pool = Arc::new(SessionPool::with_lifecycle(
         config.target_addr.clone(),
         config.pool_size,
         config.pool_timeout_secs,
         config.connect_timeout_secs,
+        config.server_lifetime_secs,
+        config.server_idle_timeout_secs,
     ));
+
+    // Spawn idle reaper — cancelled when the proxy shuts down
+    let reaper_cancel = cancel_token.clone();
+    let _reaper_handle = pool.spawn_idle_reaper(reaper_cancel);
 
     // Shared no_capture flag — starts true (no capture until Start command).
     // Use the shared handle from config if provided (allows the web toggle handler

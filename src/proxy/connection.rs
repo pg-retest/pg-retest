@@ -76,11 +76,20 @@ pub struct TimeoutConfig {
     pub server_timeout: Option<Duration>,
     /// Authentication phase timeout. `None` means no timeout.
     pub auth_timeout: Option<Duration>,
+    /// Idle-in-transaction warning threshold. `None` means disabled.
+    /// When set, a warning is logged if a read timeout fires while an
+    /// open transaction is active.
+    pub idle_transaction_timeout: Option<Duration>,
 }
 
 impl TimeoutConfig {
     /// Build from seconds values. 0 means no timeout.
     pub fn from_secs(client: u64, server: u64, auth: u64) -> Self {
+        Self::from_secs_full(client, server, auth, 0)
+    }
+
+    /// Build from seconds values with idle-in-transaction threshold. 0 means disabled.
+    pub fn from_secs_full(client: u64, server: u64, auth: u64, idle_txn: u64) -> Self {
         Self {
             client_timeout: if client > 0 {
                 Some(Duration::from_secs(client))
@@ -94,6 +103,11 @@ impl TimeoutConfig {
             },
             auth_timeout: if auth > 0 {
                 Some(Duration::from_secs(auth))
+            } else {
+                None
+            },
+            idle_transaction_timeout: if idle_txn > 0 {
+                Some(Duration::from_secs(idle_txn))
             } else {
                 None
             },
@@ -240,6 +254,7 @@ async fn handle_connection_inner(
     // Client → Server relay
     let client_idle_timeout = timeouts.client_timeout;
     let server_idle_timeout = timeouts.server_timeout;
+    let idle_txn_timeout = timeouts.idle_transaction_timeout;
 
     let c2s = tokio::spawn({
         let capture_tx = capture_tx.clone();
@@ -260,6 +275,7 @@ async fn handle_connection_inner(
                 correlate,
                 implicit_capture,
                 client_idle_timeout,
+                idle_txn_timeout,
             )
             .await
         }
@@ -351,12 +367,71 @@ async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bo
 ///
 /// Returns `Ok(Some(msg))` on success, `Ok(None)` on disconnect or timeout.
 /// On timeout, logs a warning and returns `None` to close the relay loop gracefully.
+/// If `in_transaction` is true, the warning includes an idle-in-transaction note.
 async fn read_with_timeout<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut R,
     timeout: Option<Duration>,
     session_id: u64,
     side: &str,
 ) -> Result<Option<protocol::PgMessage>> {
+    read_with_timeout_txn(reader, timeout, session_id, side, false, None).await
+}
+
+/// Read a protocol message with an optional idle timeout, with idle-in-transaction awareness.
+///
+/// When `in_transaction` is true and `idle_txn_timeout` is set, logs a specific warning
+/// about the connection being idle inside an open transaction. The warning is advisory only
+/// — the connection is NOT forcibly closed by this feature. The regular client/server timeout
+/// still controls actual connection closure.
+async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    timeout: Option<Duration>,
+    session_id: u64,
+    side: &str,
+    in_transaction: bool,
+    idle_txn_timeout: Option<Duration>,
+) -> Result<Option<protocol::PgMessage>> {
+    // When in a transaction with an idle-in-transaction timeout that's shorter than the
+    // regular timeout, first wait for the txn timeout, emit a warning, then wait the rest.
+    let txn_warn_dur = if in_transaction {
+        idle_txn_timeout.filter(|itx| {
+            // Only useful if it's shorter than the regular timeout (or there is no regular timeout)
+            timeout.is_none() || timeout.is_some_and(|t| *itx < t)
+        })
+    } else {
+        None
+    };
+
+    if let Some(itx_dur) = txn_warn_dur {
+        // Phase 1: wait up to idle_txn_timeout
+        match tokio::time::timeout(itx_dur, protocol::read_message(reader)).await {
+            Ok(result) => return result,
+            Err(_) => {
+                warn!(
+                    "Session {session_id}: {side} idle-in-transaction for {itx_dur:?} — \
+                     connection has an open transaction that may be holding locks"
+                );
+                // Phase 2: wait for the remaining regular timeout (if any)
+                if let Some(regular) = timeout {
+                    let remaining = regular - itx_dur;
+                    match tokio::time::timeout(remaining, protocol::read_message(reader)).await {
+                        Ok(result) => return result,
+                        Err(_) => {
+                            warn!(
+                                "Session {session_id}: {side} idle timeout after {regular:?}, closing connection"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                } else {
+                    // No regular timeout — just continue waiting indefinitely
+                    return protocol::read_message(reader).await;
+                }
+            }
+        }
+    }
+
+    // Standard path: no txn warning needed
     if let Some(dur) = timeout {
         match tokio::time::timeout(dur, protocol::read_message(reader)).await {
             Ok(result) => result,
@@ -385,12 +460,40 @@ async fn relay_client_to_server(
     correlate: Option<Arc<CorrelateState>>,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     idle_timeout: Option<Duration>,
+    idle_txn_timeout: Option<Duration>,
 ) -> Result<()> {
+    let mut in_transaction = false;
+
     loop {
-        let msg = match read_with_timeout(&mut client, idle_timeout, session_id, "client").await? {
+        let msg = match read_with_timeout_txn(
+            &mut client,
+            idle_timeout,
+            session_id,
+            "client",
+            in_transaction,
+            idle_txn_timeout,
+        )
+        .await?
+        {
             Some(m) => m,
             None => break, // Client disconnected or timed out
         };
+
+        // Track transaction state for idle-in-transaction detection.
+        // This runs regardless of capture state.
+        if msg.msg_type == b'Q' {
+            if let Some(sql) = extract_query_sql(&msg) {
+                let upper = sql.trim().to_uppercase();
+                if upper.starts_with("BEGIN") || upper.starts_with("START TRANSACTION") {
+                    in_transaction = true;
+                } else if upper.starts_with("COMMIT")
+                    || upper.starts_with("ROLLBACK")
+                    || upper.starts_with("END")
+                {
+                    in_transaction = false;
+                }
+            }
+        }
 
         if !no_capture.load(Ordering::Relaxed) {
             match msg.msg_type {
@@ -799,6 +902,7 @@ mod tests {
         assert!(tc.client_timeout.is_none());
         assert!(tc.server_timeout.is_none());
         assert!(tc.auth_timeout.is_none());
+        assert!(tc.idle_transaction_timeout.is_none());
     }
 
     #[test]
@@ -807,6 +911,16 @@ mod tests {
         assert_eq!(tc.client_timeout, Some(Duration::from_secs(300)));
         assert_eq!(tc.server_timeout, Some(Duration::from_secs(600)));
         assert_eq!(tc.auth_timeout, Some(Duration::from_secs(30)));
+        assert!(tc.idle_transaction_timeout.is_none()); // from_secs defaults to 0
+    }
+
+    #[test]
+    fn test_timeout_config_from_secs_full() {
+        let tc = TimeoutConfig::from_secs_full(300, 600, 30, 120);
+        assert_eq!(tc.client_timeout, Some(Duration::from_secs(300)));
+        assert_eq!(tc.server_timeout, Some(Duration::from_secs(600)));
+        assert_eq!(tc.auth_timeout, Some(Duration::from_secs(30)));
+        assert_eq!(tc.idle_transaction_timeout, Some(Duration::from_secs(120)));
     }
 
     #[test]
@@ -816,6 +930,15 @@ mod tests {
         assert!(tc.client_timeout.is_none());
         assert!(tc.server_timeout.is_none());
         assert_eq!(tc.auth_timeout, Some(Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn test_timeout_config_idle_txn_only() {
+        let tc = TimeoutConfig::from_secs_full(0, 0, 0, 60);
+        assert!(tc.client_timeout.is_none());
+        assert!(tc.server_timeout.is_none());
+        assert!(tc.auth_timeout.is_none());
+        assert_eq!(tc.idle_transaction_timeout, Some(Duration::from_secs(60)));
     }
 
     #[tokio::test]

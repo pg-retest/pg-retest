@@ -116,6 +116,9 @@ pub async fn start_proxy(
         client_timeout_secs: 300,
         server_timeout_secs: 300,
         auth_timeout_secs: 30,
+        server_lifetime_secs: 3600,
+        server_idle_timeout_secs: 600,
+        idle_transaction_timeout_secs: 0,
     };
 
     let listen = req.listen.clone();

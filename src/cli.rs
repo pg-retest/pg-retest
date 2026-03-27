@@ -350,6 +350,21 @@ pub struct ProxyArgs {
     /// Authentication/login timeout in seconds (default 30, 0 = no timeout)
     #[arg(long, default_value_t = 30)]
     pub auth_timeout: u64,
+
+    /// Maximum lifetime of a server connection in seconds (default 3600). Connections older
+    /// than this are discarded on checkin instead of returned to the pool. 0 = unlimited.
+    #[arg(long, default_value_t = 3600)]
+    pub server_lifetime: u64,
+
+    /// Maximum idle time for pooled server connections in seconds (default 600). A background
+    /// reaper closes connections idle longer than this. 0 = no reaping.
+    #[arg(long, default_value_t = 600)]
+    pub server_idle_timeout: u64,
+
+    /// Warn when a connection appears idle-in-transaction beyond this threshold in seconds
+    /// (default 0 = disabled). Does NOT forcibly close the connection.
+    #[arg(long, default_value_t = 0)]
+    pub idle_transaction_timeout: u64,
 }
 
 #[derive(clap::Args)]

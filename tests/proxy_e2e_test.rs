@@ -82,6 +82,9 @@ async fn start_proxy(
         client_timeout_secs: 300,
         server_timeout_secs: 300,
         auth_timeout_secs: 30,
+        server_lifetime_secs: 3600,
+        server_idle_timeout_secs: 600,
+        idle_transaction_timeout_secs: 0,
     };
 
     let cancel_token = CancellationToken::new();
@@ -411,6 +414,9 @@ async fn test_proxy_no_capture_mode() {
         client_timeout_secs: 300,
         server_timeout_secs: 300,
         auth_timeout_secs: 30,
+        server_lifetime_secs: 3600,
+        server_idle_timeout_secs: 600,
+        idle_transaction_timeout_secs: 0,
     };
 
     let cancel_token = CancellationToken::new();
@@ -497,6 +503,9 @@ async fn test_proxy_duration_shutdown() {
         client_timeout_secs: 300,
         server_timeout_secs: 300,
         auth_timeout_secs: 30,
+        server_lifetime_secs: 3600,
+        server_idle_timeout_secs: 600,
+        idle_transaction_timeout_secs: 0,
     };
 
     let cancel_token = CancellationToken::new();
