@@ -300,6 +300,13 @@ impl SessionPool {
 
         Some(handle)
     }
+
+    /// Set the active connection count (test helper only).
+    #[cfg(test)]
+    pub(crate) async fn set_active_count(&self, count: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.active_count = count;
+    }
 }
 
 #[cfg(test)]

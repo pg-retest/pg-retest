@@ -87,6 +87,7 @@ async fn start_proxy(
         idle_transaction_timeout_secs: 0,
         max_message_size: 0,
         max_connections_per_ip: 0,
+        shutdown_timeout_secs: 5,
     };
 
     let cancel_token = CancellationToken::new();
@@ -421,6 +422,7 @@ async fn test_proxy_no_capture_mode() {
         idle_transaction_timeout_secs: 0,
         max_message_size: 0,
         max_connections_per_ip: 0,
+        shutdown_timeout_secs: 5,
     };
 
     let cancel_token = CancellationToken::new();
@@ -512,6 +514,7 @@ async fn test_proxy_duration_shutdown() {
         idle_transaction_timeout_secs: 0,
         max_message_size: 0,
         max_connections_per_ip: 0,
+        shutdown_timeout_secs: 5,
     };
 
     let cancel_token = CancellationToken::new();

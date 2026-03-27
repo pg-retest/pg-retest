@@ -375,6 +375,11 @@ pub struct ProxyArgs {
     /// Connections exceeding this limit are rejected with a PG error.
     #[arg(long, default_value_t = 0)]
     pub max_connections_per_ip: u32,
+
+    /// Shutdown timeout in seconds — how long to wait for active connections to drain
+    /// before forcing close (default 30). 0 = force close immediately.
+    #[arg(long, default_value_t = 30)]
+    pub shutdown_timeout: u64,
 }
 
 #[derive(clap::Args)]

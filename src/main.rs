@@ -569,6 +569,7 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         idle_transaction_timeout_secs: args.idle_transaction_timeout,
         max_message_size: args.max_message_size,
         max_connections_per_ip: args.max_connections_per_ip,
+        shutdown_timeout_secs: args.shutdown_timeout,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

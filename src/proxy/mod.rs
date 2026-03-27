@@ -90,6 +90,9 @@ pub struct ProxyConfig {
     /// Maximum concurrent connections from a single source IP (default 0 = unlimited).
     /// When exceeded, new connections from that IP are rejected with a PG ErrorResponse.
     pub max_connections_per_ip: u32,
+    /// Shutdown timeout in seconds — how long to wait for active connections to drain
+    /// before forcing close (default 30). 0 = force close immediately.
+    pub shutdown_timeout_secs: u64,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -114,6 +117,29 @@ fn build_timeout_config(config: &ProxyConfig) -> TimeoutConfig {
         config.idle_transaction_timeout_secs,
     )
     .with_max_message_size(config.max_message_size)
+}
+
+/// Wait for active connections to drain, polling every 250ms.
+/// Returns immediately when active_count reaches 0.
+/// If the timeout expires, logs a warning and returns.
+async fn drain_connections(pool: &SessionPool, timeout: std::time::Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let (active, _idle) = pool.stats().await;
+        if active == 0 {
+            info!("All connections drained");
+            break;
+        }
+        if Instant::now() >= deadline {
+            warn!(
+                "Shutdown timeout: {} connection(s) still active, forcing close",
+                active
+            );
+            break;
+        }
+        info!("Draining connections... {} active", active);
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
@@ -212,8 +238,12 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     // Abort the listener to stop accepting new connections
     listener_handle.abort();
 
-    // Give active connections a moment to finish
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait for active connections to drain
+    drain_connections(
+        &pool,
+        std::time::Duration::from_secs(config.shutdown_timeout_secs),
+    )
+    .await;
 
     // Wait for collector to finish (channel senders will be dropped)
     let captured = collector_handle.await?;
@@ -640,8 +670,12 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     listener_handle.abort();
     forwarder_handle.abort();
 
-    // Give active connections a moment to finish
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait for active connections to drain
+    drain_connections(
+        &pool,
+        std::time::Duration::from_secs(config.shutdown_timeout_secs),
+    )
+    .await;
 
     info!("Persistent proxy stopped");
     Ok(())
@@ -730,8 +764,12 @@ pub async fn run_proxy_managed(
     // Abort the listener to stop accepting new connections
     listener_handle.abort();
 
-    // Give active connections a moment to finish
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait for active connections to drain
+    drain_connections(
+        &pool,
+        std::time::Duration::from_secs(config.shutdown_timeout_secs),
+    )
+    .await;
 
     // Wait for collector to finish (channel senders will be dropped)
     let captured = collector_handle.await?;
@@ -1011,9 +1049,97 @@ async fn run_proxy_managed_multi(
     listener_handle.abort();
     forwarder_handle.abort();
 
-    // Give active connections a moment to finish
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait for active connections to drain
+    drain_connections(
+        &pool,
+        std::time::Duration::from_secs(config.shutdown_timeout_secs),
+    )
+    .await;
 
     info!("Managed proxy (multi-capture) stopped");
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_drain_connections_immediate_when_no_active() {
+        let pool = SessionPool::new("127.0.0.1:5432".to_string(), 10, 30, 5);
+        let start = Instant::now();
+        drain_connections(&pool, Duration::from_secs(5)).await;
+        // Should return almost immediately (well under 1s)
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn test_drain_connections_timeout_with_active() {
+        let pool = SessionPool::new("127.0.0.1:5432".to_string(), 10, 30, 5);
+
+        // Simulate an active connection
+        pool.set_active_count(1).await;
+
+        let start = Instant::now();
+        // Use a short timeout (1s) — drain should wait and then give up
+        drain_connections(&pool, Duration::from_secs(1)).await;
+        let elapsed = start.elapsed();
+
+        // Should have waited at least ~1s (the timeout) but not much more
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "Expected at least ~1s wait, got {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "Should not exceed timeout by much, got {:?}",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_drain_connections_exits_when_active_drops_to_zero() {
+        let pool = Arc::new(SessionPool::new("127.0.0.1:5432".to_string(), 10, 30, 5));
+
+        // Start with 1 active connection
+        pool.set_active_count(1).await;
+
+        // Spawn a task that "finishes" the connection after 500ms
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            pool_clone.discard().await;
+        });
+
+        let start = Instant::now();
+        drain_connections(&pool, Duration::from_secs(30)).await;
+        let elapsed = start.elapsed();
+
+        // Should have finished around 500-750ms (after the discard), not the full 30s
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "Should exit early when active reaches 0, got {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "Should wait until active drops, got {:?}",
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_drain_connections_zero_timeout() {
+        let pool = SessionPool::new("127.0.0.1:5432".to_string(), 10, 30, 5);
+
+        // Simulate active connections
+        pool.set_active_count(5).await;
+
+        let start = Instant::now();
+        drain_connections(&pool, Duration::from_secs(0)).await;
+        // Should return immediately (0 timeout = force close)
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 }
