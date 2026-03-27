@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 
 use super::capture::CaptureEvent;
@@ -51,6 +52,7 @@ pub async fn run_listener(
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     timeouts: TimeoutConfig,
     max_connections_per_ip: u32,
+    tls_acceptor: Option<Arc<TlsAcceptor>>,
 ) -> Result<()> {
     let session_counter = AtomicU64::new(1);
     let addr = listener.local_addr()?;
@@ -115,6 +117,7 @@ pub async fn run_listener(
         info!("Session {session_id}: accepted connection from {peer_addr}");
 
         let timeouts = timeouts.clone();
+        let tls_acceptor = tls_acceptor.clone();
 
         // Create the IP guard if tracking is active — it will decrement on drop
         let ip_guard = if max_connections_per_ip > 0 {
@@ -137,6 +140,7 @@ pub async fn run_listener(
                 correlate,
                 implicit_capture,
                 timeouts,
+                tls_acceptor,
             )
             .await;
             // ip_guard is dropped here, decrementing the counter

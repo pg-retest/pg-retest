@@ -532,6 +532,26 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         }
     }
 
+    // Build client-facing TLS acceptor if cert+key are provided
+    let client_tls_acceptor = match (&args.client_tls_cert, &args.client_tls_key) {
+        (Some(cert), Some(key)) => {
+            let acceptor = pg_retest::tls::build_tls_acceptor(cert, key)?;
+            info!(
+                "Client-facing TLS enabled (cert: {}, key: {})",
+                cert.display(),
+                key.display()
+            );
+            Some(acceptor)
+        }
+        (Some(_), None) => {
+            anyhow::bail!("--client-tls-cert requires --client-tls-key");
+        }
+        (None, Some(_)) => {
+            anyhow::bail!("--client-tls-key requires --client-tls-cert");
+        }
+        (None, None) => None,
+    };
+
     let config = ProxyConfig {
         listen_addr: args.listen,
         target_addr: args.target,
@@ -570,6 +590,7 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         max_message_size: args.max_message_size,
         max_connections_per_ip: args.max_connections_per_ip,
         shutdown_timeout_secs: args.shutdown_timeout,
+        client_tls_acceptor,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

@@ -380,6 +380,16 @@ pub struct ProxyArgs {
     /// before forcing close (default 30). 0 = force close immediately.
     #[arg(long, default_value_t = 30)]
     pub shutdown_timeout: u64,
+
+    /// Path to PEM-encoded TLS certificate for client-facing connections.
+    /// When provided with --client-tls-key, the proxy accepts TLS connections from clients.
+    #[arg(long)]
+    pub client_tls_cert: Option<PathBuf>,
+
+    /// Path to PEM-encoded TLS private key for client-facing connections.
+    /// Must be provided together with --client-tls-cert.
+    #[arg(long)]
+    pub client_tls_key: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

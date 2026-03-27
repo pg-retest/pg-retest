@@ -1,13 +1,16 @@
 use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
-use tokio::io::{AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, warn};
 
 use super::capture::CaptureEvent;
@@ -18,6 +21,55 @@ use super::protocol::{
     inline_bind_params, StartupType,
 };
 use crate::correlate::capture::{has_returning, inject_returning, is_currval_or_lastval, TablePk};
+
+/// A stream that is either plain TCP or TLS-wrapped TCP.
+///
+/// Implements `AsyncRead` and `AsyncWrite` so the rest of the protocol handling
+/// code can work generically with both encrypted and unencrypted client connections.
+pub enum MaybeTlsStream {
+    Plain(TcpStream),
+    Tls(Box<tokio_rustls::server::TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for MaybeTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for MaybeTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
 
 /// Shared state for RETURNING clause detection and DataRow capture.
 ///
@@ -136,6 +188,7 @@ pub async fn handle_connection(
     correlate: Option<Arc<CorrelateState>>,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     timeouts: TimeoutConfig,
+    tls_acceptor: Option<Arc<TlsAcceptor>>,
 ) {
     if let Err(e) = handle_connection_inner(
         client_stream,
@@ -147,6 +200,7 @@ pub async fn handle_connection(
         correlate,
         implicit_capture,
         timeouts,
+        tls_acceptor,
     )
     .await
     {
@@ -165,6 +219,7 @@ async fn handle_connection_inner(
     correlate: Option<Arc<CorrelateState>>,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     timeouts: TimeoutConfig,
+    tls_acceptor: Option<Arc<TlsAcceptor>>,
 ) -> Result<()> {
     let max_msg_size = timeouts.max_message_size;
 
@@ -176,27 +231,54 @@ async fn handle_connection_inner(
         None => return Ok(()), // Client disconnected immediately
     };
 
-    // Handle SSLRequest
-    let startup_msg = match protocol::classify_startup(&startup_msg) {
-        StartupType::SslRequest => {
-            // Reject SSL — respond with 'N'
-            client_stream.write_all(b"N").await?;
-            // Client should now send actual StartupMessage
-            match protocol::read_startup_message(&mut client_stream, max_msg_size).await? {
-                Some(msg) => msg,
-                None => return Ok(()),
+    // Handle SSLRequest — may upgrade to TLS before continuing
+    let (mut client_stream, startup_msg): (MaybeTlsStream, _) =
+        match protocol::classify_startup(&startup_msg) {
+            StartupType::SslRequest => {
+                if let Some(ref acceptor) = tls_acceptor {
+                    // Accept TLS — respond with 'S' and upgrade the connection
+                    client_stream.write_all(b"S").await?;
+                    let tls_stream = match acceptor.accept(client_stream).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!("Session {session_id}: TLS handshake failed: {e}");
+                            return Ok(());
+                        }
+                    };
+                    debug!("Session {session_id}: TLS handshake complete");
+                    let mut client_stream = MaybeTlsStream::Tls(Box::new(tls_stream));
+                    // Client should now send actual StartupMessage over TLS
+                    let msg = match protocol::read_startup_message(&mut client_stream, max_msg_size)
+                        .await?
+                    {
+                        Some(msg) => msg,
+                        None => return Ok(()),
+                    };
+                    (client_stream, msg)
+                } else {
+                    // No TLS configured — reject with 'N'
+                    client_stream.write_all(b"N").await?;
+                    let mut client_stream = MaybeTlsStream::Plain(client_stream);
+                    // Client should now send actual StartupMessage
+                    let msg = match protocol::read_startup_message(&mut client_stream, max_msg_size)
+                        .await?
+                    {
+                        Some(msg) => msg,
+                        None => return Ok(()),
+                    };
+                    (client_stream, msg)
+                }
             }
-        }
-        StartupType::CancelRequest => {
-            debug!("Session {session_id}: cancel request (not yet supported)");
-            return Ok(());
-        }
-        StartupType::StartupMessage => startup_msg,
-        StartupType::Unknown => {
-            warn!("Session {session_id}: unknown startup message");
-            return Ok(());
-        }
-    };
+            StartupType::CancelRequest => {
+                debug!("Session {session_id}: cancel request (not yet supported)");
+                return Ok(());
+            }
+            StartupType::StartupMessage => (MaybeTlsStream::Plain(client_stream), startup_msg),
+            StartupType::Unknown => {
+                warn!("Session {session_id}: unknown startup message");
+                return Ok(());
+            }
+        };
 
     // Extract user/database from startup
     let (user, database) = protocol::parse_startup_params(&startup_msg);
@@ -336,9 +418,9 @@ async fn handle_connection_inner(
 
 /// Relay auth messages between client and server until ReadyForQuery.
 /// Returns true if auth succeeded, false if the connection was lost.
-async fn relay_auth(
-    client: &mut TcpStream,
-    server: &mut TcpStream,
+async fn relay_auth<C: AsyncRead + AsyncWrite + Unpin, S: AsyncRead + AsyncWrite + Unpin>(
+    client: &mut C,
+    server: &mut S,
     max_message_size: u32,
 ) -> Result<bool> {
     loop {
@@ -489,9 +571,9 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
 
 /// Relay messages from client to server, extracting capture data.
 #[allow(clippy::too_many_arguments)]
-async fn relay_client_to_server(
-    mut client: BufReader<ReadHalf<TcpStream>>,
-    mut server: BufWriter<WriteHalf<TcpStream>>,
+async fn relay_client_to_server<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    mut client: BufReader<R>,
+    mut server: BufWriter<W>,
     session_id: u64,
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     stmt_cache: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
@@ -663,9 +745,9 @@ const MAX_RETURNING_ROWS: usize = 100;
 
 /// Relay messages from server to client, extracting capture data.
 #[allow(clippy::too_many_arguments)]
-async fn relay_server_to_client(
-    mut server: BufReader<ReadHalf<TcpStream>>,
-    mut client: BufWriter<WriteHalf<TcpStream>>,
+async fn relay_server_to_client<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    mut server: BufReader<R>,
+    mut client: BufWriter<W>,
     session_id: u64,
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     no_capture: Arc<AtomicBool>,

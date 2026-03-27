@@ -88,6 +88,7 @@ async fn start_proxy(
         max_message_size: 0,
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 5,
+        client_tls_acceptor: None,
     };
 
     let cancel_token = CancellationToken::new();
@@ -423,6 +424,7 @@ async fn test_proxy_no_capture_mode() {
         max_message_size: 0,
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 5,
+        client_tls_acceptor: None,
     };
 
     let cancel_token = CancellationToken::new();
@@ -515,6 +517,7 @@ async fn test_proxy_duration_shutdown() {
         max_message_size: 0,
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 5,
+        client_tls_acceptor: None,
     };
 
     let cancel_token = CancellationToken::new();

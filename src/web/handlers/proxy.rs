@@ -122,6 +122,7 @@ pub async fn start_proxy(
         max_message_size: crate::proxy::protocol::DEFAULT_MAX_MESSAGE_SIZE,
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 30,
+        client_tls_acceptor: None,
     };
 
     let listen = req.listen.clone();

@@ -93,6 +93,9 @@ pub struct ProxyConfig {
     /// Shutdown timeout in seconds — how long to wait for active connections to drain
     /// before forcing close (default 30). 0 = force close immediately.
     pub shutdown_timeout_secs: u64,
+    /// Optional TLS acceptor for client-facing connections.
+    /// When set, the proxy accepts SSLRequest from clients and upgrades connections to TLS.
+    pub client_tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -173,6 +176,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     let max_conns_per_ip = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
+    let tls_acceptor = config.client_tls_acceptor.map(Arc::new);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -184,6 +188,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
             implicit_capture,
             timeouts,
             max_conns_per_ip,
+            tls_acceptor,
         )
         .await
     });
@@ -342,6 +347,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let max_conns_per_ip_persistent = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
+    let tls_acceptor_persistent = config.client_tls_acceptor.map(Arc::new);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -353,6 +359,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             implicit_capture,
             timeouts,
             max_conns_per_ip_persistent,
+            tls_acceptor_persistent,
         )
         .await
     });
@@ -728,6 +735,7 @@ pub async fn run_proxy_managed(
     let max_conns_per_ip_managed = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
+    let tls_acceptor_managed = config.client_tls_acceptor.map(Arc::new);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -739,6 +747,7 @@ pub async fn run_proxy_managed(
             implicit_capture,
             timeouts,
             max_conns_per_ip_managed,
+            tls_acceptor_managed,
         )
         .await
     });
@@ -848,6 +857,7 @@ async fn run_proxy_managed_multi(
     let max_conns_per_ip_multi = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
+    let tls_acceptor_multi = config.client_tls_acceptor.map(Arc::new);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -859,6 +869,7 @@ async fn run_proxy_managed_multi(
             implicit_capture,
             timeouts,
             max_conns_per_ip_multi,
+            tls_acceptor_multi,
         )
         .await
     });

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::Arc;
 use tokio_postgres_rustls::MakeRustlsConnect;
+use tokio_rustls::TlsAcceptor;
 
 /// TLS mode for PostgreSQL connections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +65,31 @@ pub fn parse_tls_mode(s: &str) -> Result<TlsMode> {
     }
 }
 
+/// Build a TLS acceptor for client-facing TLS (proxy server-side).
+///
+/// Reads PEM-encoded certificate chain and private key from the given paths
+/// and constructs a `TlsAcceptor` for use in the proxy accept loop.
+pub fn build_tls_acceptor(cert_path: &Path, key_path: &Path) -> Result<TlsAcceptor> {
+    let cert_pem = std::fs::read(cert_path)
+        .with_context(|| format!("Failed to read TLS cert: {}", cert_path.display()))?;
+    let key_pem = std::fs::read(key_path)
+        .with_context(|| format!("Failed to read TLS key: {}", key_path.display()))?;
+
+    let certs: Vec<_> = rustls_pemfile::certs(&mut &cert_pem[..])
+        .collect::<std::result::Result<_, _>>()
+        .context("Failed to parse TLS certificate PEM")?;
+    let key = rustls_pemfile::private_key(&mut &key_pem[..])
+        .context("Failed to parse TLS private key PEM")?
+        .ok_or_else(|| anyhow::anyhow!("No private key found in {}", key_path.display()))?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .context("Failed to build TLS server config")?;
+
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +113,55 @@ mod tests {
     fn test_bad_ca_path_errors() {
         let result = make_tls_connector(TlsMode::Require, Some(Path::new("/nonexistent/ca.pem")));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_tls_acceptor_bad_cert_path() {
+        let result = build_tls_acceptor(
+            Path::new("/nonexistent/cert.pem"),
+            Path::new("/nonexistent/key.pem"),
+        );
+        let err = result.err().expect("should fail");
+        assert!(
+            format!("{:#}", err).contains("Failed to read TLS cert"),
+            "should report cert read failure, got: {:#}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_build_tls_acceptor_bad_key_path() {
+        // Create a valid-looking cert file but bad key path
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        std::fs::write(&cert_path, "not a cert").unwrap();
+        let result = build_tls_acceptor(&cert_path, Path::new("/nonexistent/key.pem"));
+        let err = result.err().expect("should fail");
+        assert!(
+            format!("{:#}", err).contains("Failed to read TLS key"),
+            "should report key read failure, got: {:#}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_build_tls_acceptor_valid_self_signed() {
+        // Uses pre-generated self-signed test cert/key from fixtures
+        let cert_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-cert.pem");
+        let key_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-key.pem");
+
+        let result = build_tls_acceptor(&cert_path, &key_path);
+        assert!(result.is_ok(), "should build acceptor: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_build_tls_acceptor_empty_key_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, "").unwrap();
+        std::fs::write(&key_path, "").unwrap();
+        let result = build_tls_acceptor(&cert_path, &key_path);
+        assert!(result.is_err(), "empty files should fail");
     }
 }
