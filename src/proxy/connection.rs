@@ -67,7 +67,7 @@ pub struct ImplicitCaptureState {
     pub stealth: bool,
 }
 
-/// Timeout configuration for proxy connections.
+/// Timeout and resource-limit configuration for proxy connections.
 #[derive(Clone, Debug)]
 pub struct TimeoutConfig {
     /// Client idle read timeout. `None` means no timeout.
@@ -80,6 +80,8 @@ pub struct TimeoutConfig {
     /// When set, a warning is logged if a read timeout fires while an
     /// open transaction is active.
     pub idle_transaction_timeout: Option<Duration>,
+    /// Maximum PG protocol message size in bytes. 0 = unlimited.
+    pub max_message_size: u32,
 }
 
 impl TimeoutConfig {
@@ -111,7 +113,14 @@ impl TimeoutConfig {
             } else {
                 None
             },
+            max_message_size: 0,
         }
+    }
+
+    /// Set the max message size.
+    pub fn with_max_message_size(mut self, max_message_size: u32) -> Self {
+        self.max_message_size = max_message_size;
+        self
     }
 }
 
@@ -157,9 +166,12 @@ async fn handle_connection_inner(
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     timeouts: TimeoutConfig,
 ) -> Result<()> {
+    let max_msg_size = timeouts.max_message_size;
+
     // ── Phase 1: Startup ────────────────────────────────────────────
     // Read the first message from client (no type byte — startup message)
-    let startup_msg = match protocol::read_startup_message(&mut client_stream).await? {
+    let startup_msg = match protocol::read_startup_message(&mut client_stream, max_msg_size).await?
+    {
         Some(msg) => msg,
         None => return Ok(()), // Client disconnected immediately
     };
@@ -170,7 +182,7 @@ async fn handle_connection_inner(
             // Reject SSL — respond with 'N'
             client_stream.write_all(b"N").await?;
             // Client should now send actual StartupMessage
-            match protocol::read_startup_message(&mut client_stream).await? {
+            match protocol::read_startup_message(&mut client_stream, max_msg_size).await? {
                 Some(msg) => msg,
                 None => return Ok(()),
             }
@@ -202,8 +214,11 @@ async fn handle_connection_inner(
 
     // ── Phase 3: Auth passthrough (with optional timeout) ──────────
     let auth_complete = if let Some(auth_dur) = timeouts.auth_timeout {
-        match tokio::time::timeout(auth_dur, relay_auth(&mut client_stream, &mut server_stream))
-            .await
+        match tokio::time::timeout(
+            auth_dur,
+            relay_auth(&mut client_stream, &mut server_stream, max_msg_size),
+        )
+        .await
         {
             Ok(result) => result?,
             Err(_) => {
@@ -213,7 +228,7 @@ async fn handle_connection_inner(
             }
         }
     } else {
-        relay_auth(&mut client_stream, &mut server_stream).await?
+        relay_auth(&mut client_stream, &mut server_stream, max_msg_size).await?
     };
     if !auth_complete {
         pool.discard().await;
@@ -276,6 +291,7 @@ async fn handle_connection_inner(
                 implicit_capture,
                 client_idle_timeout,
                 idle_txn_timeout,
+                max_msg_size,
             )
             .await
         }
@@ -292,6 +308,7 @@ async fn handle_connection_inner(
             metrics_tx2,
             correlate,
             server_idle_timeout,
+            max_msg_size,
         )
         .await
     });
@@ -319,10 +336,14 @@ async fn handle_connection_inner(
 
 /// Relay auth messages between client and server until ReadyForQuery.
 /// Returns true if auth succeeded, false if the connection was lost.
-async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bool> {
+async fn relay_auth(
+    client: &mut TcpStream,
+    server: &mut TcpStream,
+    max_message_size: u32,
+) -> Result<bool> {
     loop {
         // Read server response
-        let msg = match protocol::read_message(server).await? {
+        let msg = match protocol::read_message(server, max_message_size).await? {
             Some(m) => m,
             None => return Ok(false),
         };
@@ -351,7 +372,9 @@ async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bo
                     // 3=Cleartext, 5=MD5, 7=GSSAPI, 8=SSPI,
                     // 10=SASL, 11=SASLContinue
                     _ => {
-                        if let Some(client_msg) = protocol::read_message(client).await? {
+                        if let Some(client_msg) =
+                            protocol::read_message(client, max_message_size).await?
+                        {
                             protocol::write_message(server, &client_msg).await?;
                         } else {
                             return Ok(false);
@@ -373,8 +396,18 @@ async fn read_with_timeout<R: tokio::io::AsyncRead + Unpin>(
     timeout: Option<Duration>,
     session_id: u64,
     side: &str,
+    max_message_size: u32,
 ) -> Result<Option<protocol::PgMessage>> {
-    read_with_timeout_txn(reader, timeout, session_id, side, false, None).await
+    read_with_timeout_txn(
+        reader,
+        timeout,
+        session_id,
+        side,
+        false,
+        None,
+        max_message_size,
+    )
+    .await
 }
 
 /// Read a protocol message with an optional idle timeout, with idle-in-transaction awareness.
@@ -390,6 +423,7 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
     side: &str,
     in_transaction: bool,
     idle_txn_timeout: Option<Duration>,
+    max_message_size: u32,
 ) -> Result<Option<protocol::PgMessage>> {
     // When in a transaction with an idle-in-transaction timeout that's shorter than the
     // regular timeout, first wait for the txn timeout, emit a warning, then wait the rest.
@@ -404,7 +438,8 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
 
     if let Some(itx_dur) = txn_warn_dur {
         // Phase 1: wait up to idle_txn_timeout
-        match tokio::time::timeout(itx_dur, protocol::read_message(reader)).await {
+        match tokio::time::timeout(itx_dur, protocol::read_message(reader, max_message_size)).await
+        {
             Ok(result) => return result,
             Err(_) => {
                 warn!(
@@ -414,7 +449,12 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
                 // Phase 2: wait for the remaining regular timeout (if any)
                 if let Some(regular) = timeout {
                     let remaining = regular - itx_dur;
-                    match tokio::time::timeout(remaining, protocol::read_message(reader)).await {
+                    match tokio::time::timeout(
+                        remaining,
+                        protocol::read_message(reader, max_message_size),
+                    )
+                    .await
+                    {
                         Ok(result) => return result,
                         Err(_) => {
                             warn!(
@@ -425,7 +465,7 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
                     }
                 } else {
                     // No regular timeout — just continue waiting indefinitely
-                    return protocol::read_message(reader).await;
+                    return protocol::read_message(reader, max_message_size).await;
                 }
             }
         }
@@ -433,7 +473,7 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
 
     // Standard path: no txn warning needed
     if let Some(dur) = timeout {
-        match tokio::time::timeout(dur, protocol::read_message(reader)).await {
+        match tokio::time::timeout(dur, protocol::read_message(reader, max_message_size)).await {
             Ok(result) => result,
             Err(_) => {
                 warn!(
@@ -443,7 +483,7 @@ async fn read_with_timeout_txn<R: tokio::io::AsyncRead + Unpin>(
             }
         }
     } else {
-        protocol::read_message(reader).await
+        protocol::read_message(reader, max_message_size).await
     }
 }
 
@@ -461,6 +501,7 @@ async fn relay_client_to_server(
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     idle_timeout: Option<Duration>,
     idle_txn_timeout: Option<Duration>,
+    max_message_size: u32,
 ) -> Result<()> {
     let mut in_transaction = false;
 
@@ -472,6 +513,7 @@ async fn relay_client_to_server(
             "client",
             in_transaction,
             idle_txn_timeout,
+            max_message_size,
         )
         .await?
         {
@@ -630,9 +672,18 @@ async fn relay_server_to_client(
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
     idle_timeout: Option<Duration>,
+    max_message_size: u32,
 ) -> Result<()> {
     loop {
-        let msg = match read_with_timeout(&mut server, idle_timeout, session_id, "server").await? {
+        let msg = match read_with_timeout(
+            &mut server,
+            idle_timeout,
+            session_id,
+            "server",
+            max_message_size,
+        )
+        .await?
+        {
             Some(m) => m,
             None => break, // Server disconnected or timed out
         };
@@ -946,7 +997,7 @@ mod tests {
         // Simulate an empty reader (EOF) with no timeout
         let data: &[u8] = &[];
         let mut cursor = std::io::Cursor::new(data);
-        let result = read_with_timeout(&mut cursor, None, 1, "test").await;
+        let result = read_with_timeout(&mut cursor, None, 1, "test", 0).await;
         // EOF produces Ok(None)
         assert!(result.unwrap().is_none());
     }
@@ -957,7 +1008,7 @@ mod tests {
         // We use a tokio::io::pending() which never completes.
         let timeout = Some(Duration::from_millis(50));
         let mut reader = tokio::io::empty(); // Returns EOF immediately
-        let result = read_with_timeout(&mut reader, timeout, 1, "test").await;
+        let result = read_with_timeout(&mut reader, timeout, 1, "test", 0).await;
         // empty() returns EOF, so we get Ok(None) rather than timeout
         assert!(result.unwrap().is_none());
     }
@@ -972,7 +1023,7 @@ mod tests {
         let mut reader = tokio::io::BufReader::new(rx);
 
         let start = std::time::Instant::now();
-        let result = read_with_timeout(&mut reader, timeout, 42, "test").await;
+        let result = read_with_timeout(&mut reader, timeout, 42, "test", 0).await;
         let elapsed = start.elapsed();
 
         // Should timeout and return Ok(None)

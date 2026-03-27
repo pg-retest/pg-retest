@@ -83,6 +83,13 @@ pub struct ProxyConfig {
     /// Logs a warning when a connection appears idle-in-transaction beyond this threshold.
     /// Does NOT forcibly close the connection.
     pub idle_transaction_timeout_secs: u64,
+    /// Maximum PG protocol message size in bytes (default 67_108_864 = 64MB).
+    /// Messages exceeding this limit are rejected with a PG ErrorResponse.
+    /// 0 = unlimited.
+    pub max_message_size: u32,
+    /// Maximum concurrent connections from a single source IP (default 0 = unlimited).
+    /// When exceeded, new connections from that IP are rejected with a PG ErrorResponse.
+    pub max_connections_per_ip: u32,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -106,6 +113,7 @@ fn build_timeout_config(config: &ProxyConfig) -> TimeoutConfig {
         config.auth_timeout_secs,
         config.idle_transaction_timeout_secs,
     )
+    .with_max_message_size(config.max_message_size)
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
@@ -136,6 +144,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     let pool_clone = pool.clone();
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let enable_correlation = config.enable_correlation;
+    let max_conns_per_ip = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
@@ -148,6 +157,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
             enable_correlation,
             implicit_capture,
             timeouts,
+            max_conns_per_ip,
         )
         .await
     });
@@ -299,6 +309,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let pool_clone = pool.clone();
     let no_capture_clone = no_capture.clone();
     let enable_correlation = config.enable_correlation;
+    let max_conns_per_ip_persistent = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
@@ -311,6 +322,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             enable_correlation,
             implicit_capture,
             timeouts,
+            max_conns_per_ip_persistent,
         )
         .await
     });
@@ -679,6 +691,7 @@ pub async fn run_proxy_managed(
     let pool_clone = pool.clone();
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let enable_correlation = config.enable_correlation;
+    let max_conns_per_ip_managed = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
@@ -691,6 +704,7 @@ pub async fn run_proxy_managed(
             enable_correlation,
             implicit_capture,
             timeouts,
+            max_conns_per_ip_managed,
         )
         .await
     });
@@ -793,6 +807,7 @@ async fn run_proxy_managed_multi(
     let pool_clone = pool.clone();
     let no_capture_clone = no_capture.clone();
     let enable_correlation = config.enable_correlation;
+    let max_conns_per_ip_multi = config.max_connections_per_ip;
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
@@ -805,6 +820,7 @@ async fn run_proxy_managed_multi(
             enable_correlation,
             implicit_capture,
             timeouts,
+            max_conns_per_ip_multi,
         )
         .await
     });

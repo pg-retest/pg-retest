@@ -2,6 +2,43 @@ use anyhow::{bail, Result};
 use bytes::{BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Default maximum message size: 64 MB.
+pub const DEFAULT_MAX_MESSAGE_SIZE: u32 = 67_108_864;
+
+/// Build a PG ErrorResponse message suitable for writing directly to a client stream.
+/// Returns the complete wire bytes (type byte + length + fields).
+///
+/// Fields: S (severity), V (severity non-localized), C (SQLSTATE code), M (message).
+pub fn build_error_response(severity: &str, code: &str, message: &str) -> Vec<u8> {
+    // Build the body: field entries + final null terminator
+    let mut body = Vec::new();
+    // Severity (localized)
+    body.push(b'S');
+    body.extend_from_slice(severity.as_bytes());
+    body.push(0);
+    // Severity (non-localized, PG 9.6+)
+    body.push(b'V');
+    body.extend_from_slice(severity.as_bytes());
+    body.push(0);
+    // SQLSTATE code
+    body.push(b'C');
+    body.extend_from_slice(code.as_bytes());
+    body.push(0);
+    // Message
+    body.push(b'M');
+    body.extend_from_slice(message.as_bytes());
+    body.push(0);
+    // Terminator
+    body.push(0);
+
+    let len = (body.len() + 4) as i32; // +4 for length field itself
+    let mut buf = Vec::with_capacity(1 + 4 + body.len());
+    buf.push(b'E');
+    buf.extend_from_slice(&len.to_be_bytes());
+    buf.extend_from_slice(&body);
+    buf
+}
+
 /// A parsed PG protocol message frame.
 #[derive(Debug, Clone)]
 pub struct PgMessage {
@@ -42,7 +79,13 @@ pub enum StartupType {
 
 /// Read a single PG message from a stream (post-startup phase).
 /// Returns None if the stream is closed (EOF).
-pub async fn read_message<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Option<PgMessage>> {
+///
+/// `max_message_size` limits the total message length (the 4-byte length field value).
+/// Pass `0` to disable the check (unlimited).
+pub async fn read_message<R: AsyncRead + Unpin>(
+    stream: &mut R,
+    max_message_size: u32,
+) -> Result<Option<PgMessage>> {
     // Read type byte
     let msg_type = match read_byte(stream).await? {
         Some(b) => b,
@@ -56,6 +99,15 @@ pub async fn read_message<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Option
 
     if len < 4 {
         bail!("Invalid message length: {len}");
+    }
+
+    // Check against max message size BEFORE allocating
+    if max_message_size > 0 && len as u64 > max_message_size as u64 {
+        bail!(
+            "Message size {} bytes exceeds maximum allowed {} bytes",
+            len,
+            max_message_size
+        );
     }
 
     // Read remaining payload (length includes the 4 length bytes)
@@ -72,8 +124,11 @@ pub async fn read_message<R: AsyncRead + Unpin>(stream: &mut R) -> Result<Option
 
 /// Read a startup-phase message (no type byte — just length + payload).
 /// Used for the first message from a client (StartupMessage, SSLRequest, CancelRequest).
+///
+/// `max_message_size` limits the total message length. Pass `0` to disable.
 pub async fn read_startup_message<R: AsyncRead + Unpin>(
     stream: &mut R,
+    max_message_size: u32,
 ) -> Result<Option<PgMessage>> {
     // Read 4-byte length
     let mut len_buf = [0u8; 4];
@@ -86,6 +141,15 @@ pub async fn read_startup_message<R: AsyncRead + Unpin>(
 
     if len < 4 {
         bail!("Invalid startup message length: {len}");
+    }
+
+    // Check against max message size BEFORE allocating
+    if max_message_size > 0 && len as u64 > max_message_size as u64 {
+        bail!(
+            "Startup message size {} bytes exceeds maximum allowed {} bytes",
+            len,
+            max_message_size
+        );
     }
 
     let body_len = len - 4;
@@ -490,7 +554,7 @@ mod tests {
         let sql = b"SELECT 1\0";
         let wire = make_message(b'Q', sql);
         let mut cursor = Cursor::new(wire);
-        let msg = read_message(&mut cursor).await.unwrap().unwrap();
+        let msg = read_message(&mut cursor, 0).await.unwrap().unwrap();
         assert_eq!(msg.msg_type, b'Q');
         assert_eq!(msg.body(), sql);
     }
@@ -498,7 +562,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_message_eof() {
         let mut cursor = Cursor::new(Vec::<u8>::new());
-        let msg = read_message(&mut cursor).await.unwrap();
+        let msg = read_message(&mut cursor, 0).await.unwrap();
         assert!(msg.is_none());
     }
 
@@ -508,7 +572,7 @@ mod tests {
         buf.extend_from_slice(&8i32.to_be_bytes()); // length = 8
         buf.extend_from_slice(&SSL_REQUEST_CODE.to_be_bytes());
         let mut cursor = Cursor::new(buf);
-        let msg = read_startup_message(&mut cursor).await.unwrap().unwrap();
+        let msg = read_startup_message(&mut cursor, 0).await.unwrap().unwrap();
         assert_eq!(msg.msg_type, 0);
         assert_eq!(classify_startup(&msg), StartupType::SslRequest);
     }
@@ -522,7 +586,7 @@ mod tests {
         buf.extend_from_slice(&PROTOCOL_VERSION_3.to_be_bytes());
         buf.extend_from_slice(params);
         let mut cursor = Cursor::new(buf);
-        let msg = read_startup_message(&mut cursor).await.unwrap().unwrap();
+        let msg = read_startup_message(&mut cursor, 0).await.unwrap().unwrap();
         assert_eq!(classify_startup(&msg), StartupType::StartupMessage);
         let (user, db) = parse_startup_params(&msg);
         assert_eq!(user.as_deref(), Some("app"));
@@ -534,14 +598,14 @@ mod tests {
         let sql = b"SELECT 1\0";
         let wire = make_message(b'Q', sql);
         let mut cursor = Cursor::new(wire);
-        let msg = read_message(&mut cursor).await.unwrap().unwrap();
+        let msg = read_message(&mut cursor, 0).await.unwrap().unwrap();
 
         let mut output = Vec::new();
         write_message(&mut output, &msg).await.unwrap();
 
         // Re-read from output
         let mut cursor2 = Cursor::new(output);
-        let msg2 = read_message(&mut cursor2).await.unwrap().unwrap();
+        let msg2 = read_message(&mut cursor2, 0).await.unwrap().unwrap();
         assert_eq!(msg2.msg_type, b'Q');
         assert_eq!(msg2.body(), sql);
     }
@@ -549,7 +613,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_startup_eof() {
         let mut cursor = Cursor::new(Vec::<u8>::new());
-        let msg = read_startup_message(&mut cursor).await.unwrap();
+        let msg = read_startup_message(&mut cursor, 0).await.unwrap();
         assert!(msg.is_none());
     }
 
@@ -758,5 +822,74 @@ mod tests {
     fn test_extract_data_row_wrong_type() {
         let msg = make_pg_message(b'Q', b"SELECT 1\0");
         assert!(extract_data_row(&msg, 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_message_exceeds_max_size() {
+        // Build a message claiming to be 1000 bytes, but set max to 100
+        let mut wire = Vec::new();
+        wire.push(b'Q');
+        wire.extend_from_slice(&1000i32.to_be_bytes()); // length field = 1000
+                                                        // Pad enough so the function can read the length header
+        wire.extend_from_slice(&[0u8; 100]);
+        let mut cursor = Cursor::new(wire);
+        let result = read_message(&mut cursor, 100).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("exceeds maximum"));
+    }
+
+    #[tokio::test]
+    async fn test_read_message_at_exact_max_size() {
+        // Message with length exactly at max should succeed
+        let sql = b"SELECT 1\0";
+        let wire = make_message(b'Q', sql);
+        let msg_len = (sql.len() + 4) as u32; // the length field value
+        let mut cursor = Cursor::new(wire);
+        let msg = read_message(&mut cursor, msg_len).await.unwrap().unwrap();
+        assert_eq!(msg.msg_type, b'Q');
+    }
+
+    #[tokio::test]
+    async fn test_read_startup_message_exceeds_max_size() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&5000i32.to_be_bytes()); // length = 5000
+        buf.extend_from_slice(&[0u8; 100]); // partial payload
+        let mut cursor = Cursor::new(buf);
+        let result = read_startup_message(&mut cursor, 100).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn test_build_error_response() {
+        let resp = build_error_response("FATAL", "08P01", "message too large");
+        // Should start with 'E'
+        assert_eq!(resp[0], b'E');
+        // Parse as a PgMessage to verify it's well-formed
+        let body_len = i32::from_be_bytes([resp[1], resp[2], resp[3], resp[4]]) as usize;
+        assert_eq!(resp.len(), 1 + body_len);
+        // Should contain our message
+        let body_str = String::from_utf8_lossy(&resp[5..]);
+        assert!(body_str.contains("FATAL"));
+        assert!(body_str.contains("08P01"));
+        assert!(body_str.contains("message too large"));
+    }
+
+    #[test]
+    fn test_build_error_response_parseable() {
+        // Verify the error response can be parsed by extract_error_message
+        let resp = build_error_response("ERROR", "53300", "too many connections");
+        // Skip type byte, read length, build PgMessage
+        let _len = i32::from_be_bytes([resp[1], resp[2], resp[3], resp[4]]);
+        let mut payload = BytesMut::new();
+        payload.put_slice(&resp[1..]); // everything after type byte
+        let msg = PgMessage {
+            msg_type: b'E',
+            payload,
+        };
+        let extracted = extract_error_message(&msg).unwrap();
+        assert_eq!(extracted, "too many connections");
     }
 }

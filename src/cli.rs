@@ -365,6 +365,16 @@ pub struct ProxyArgs {
     /// (default 0 = disabled). Does NOT forcibly close the connection.
     #[arg(long, default_value_t = 0)]
     pub idle_transaction_timeout: u64,
+
+    /// Maximum PG protocol message size in bytes (default 67108864 = 64MB).
+    /// Messages exceeding this are rejected and the connection is closed. 0 = unlimited.
+    #[arg(long, default_value_t = 67_108_864)]
+    pub max_message_size: u32,
+
+    /// Maximum concurrent connections from a single source IP (default 0 = unlimited).
+    /// Connections exceeding this limit are rejected with a PG error.
+    #[arg(long, default_value_t = 0)]
+    pub max_connections_per_ip: u32,
 }
 
 #[derive(clap::Args)]
