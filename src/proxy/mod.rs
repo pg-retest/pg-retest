@@ -23,7 +23,7 @@ use uuid::Uuid;
 use self::capture::{
     build_profile, build_profile_from_staging, run_collector, run_staging_collector, CaptureEvent,
 };
-use self::connection::ImplicitCaptureState;
+use self::connection::{ImplicitCaptureState, TimeoutConfig};
 use self::control::{build_control_router, CaptureCommand, ControlState};
 use self::pool::SessionPool;
 use self::staging::StagingDb;
@@ -67,6 +67,12 @@ pub struct ProxyConfig {
     pub listen_backlog: u32,
     /// Connect timeout in seconds when opening connections to the target (default 5).
     pub connect_timeout_secs: u64,
+    /// Client idle timeout in seconds (default 300). 0 = no timeout.
+    pub client_timeout_secs: u64,
+    /// Server idle timeout in seconds (default 300). 0 = no timeout.
+    pub server_timeout_secs: u64,
+    /// Auth/login timeout in seconds (default 30). 0 = no timeout.
+    pub auth_timeout_secs: u64,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -80,6 +86,15 @@ fn build_implicit_capture_state(config: &ProxyConfig) -> Option<Arc<ImplicitCapt
     } else {
         None
     }
+}
+
+/// Build a `TimeoutConfig` from the proxy config.
+fn build_timeout_config(config: &ProxyConfig) -> TimeoutConfig {
+    TimeoutConfig::from_secs(
+        config.client_timeout_secs,
+        config.server_timeout_secs,
+        config.auth_timeout_secs,
+    )
 }
 
 /// Run the proxy server (CLI mode — signal-based shutdown).
@@ -106,6 +121,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let enable_correlation = config.enable_correlation;
     let implicit_capture = build_implicit_capture_state(&config);
+    let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -115,6 +131,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
             None,
             enable_correlation,
             implicit_capture,
+            timeouts,
         )
         .await
     });
@@ -262,6 +279,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let no_capture_clone = no_capture.clone();
     let enable_correlation = config.enable_correlation;
     let implicit_capture = build_implicit_capture_state(&config);
+    let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -271,6 +289,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             None,
             enable_correlation,
             implicit_capture,
+            timeouts,
         )
         .await
     });
@@ -634,6 +653,7 @@ pub async fn run_proxy_managed(
     let no_capture = Arc::new(AtomicBool::new(config.no_capture));
     let enable_correlation = config.enable_correlation;
     let implicit_capture = build_implicit_capture_state(&config);
+    let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -643,6 +663,7 @@ pub async fn run_proxy_managed(
             Some(metrics_tx),
             enable_correlation,
             implicit_capture,
+            timeouts,
         )
         .await
     });
@@ -740,6 +761,7 @@ async fn run_proxy_managed_multi(
     let no_capture_clone = no_capture.clone();
     let enable_correlation = config.enable_correlation;
     let implicit_capture = build_implicit_capture_state(&config);
+    let timeouts = build_timeout_config(&config);
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -749,6 +771,7 @@ async fn run_proxy_managed_multi(
             Some(metrics_tx),
             enable_correlation,
             implicit_capture,
+            timeouts,
         )
         .await
     });

@@ -7,11 +7,12 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use super::capture::CaptureEvent;
-use super::connection::{handle_connection, CorrelateState, ImplicitCaptureState};
+use super::connection::{handle_connection, CorrelateState, ImplicitCaptureState, TimeoutConfig};
 use super::pool::SessionPool;
 use super::socket;
 
 /// Run the TCP accept loop.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_listener(
     listener: TcpListener,
     pool: Arc<SessionPool>,
@@ -20,6 +21,7 @@ pub async fn run_listener(
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     enable_correlation: bool,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
+    timeouts: TimeoutConfig,
 ) -> Result<()> {
     let session_counter = AtomicU64::new(1);
     let addr = listener.local_addr()?;
@@ -50,6 +52,7 @@ pub async fn run_listener(
 
         info!("Session {session_id}: accepted connection from {peer_addr}");
 
+        let timeouts = timeouts.clone();
         tokio::spawn(async move {
             handle_connection(
                 client_stream,
@@ -60,6 +63,7 @@ pub async fn run_listener(
                 metrics_tx,
                 correlate,
                 implicit_capture,
+                timeouts,
             )
             .await;
         });

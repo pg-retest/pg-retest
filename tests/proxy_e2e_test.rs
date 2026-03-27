@@ -79,6 +79,9 @@ async fn start_proxy(
         shared_no_capture: None,
         listen_backlog: 128,
         connect_timeout_secs: 5,
+        client_timeout_secs: 300,
+        server_timeout_secs: 300,
+        auth_timeout_secs: 30,
     };
 
     let cancel_token = CancellationToken::new();
@@ -405,6 +408,9 @@ async fn test_proxy_no_capture_mode() {
         shared_no_capture: None,
         listen_backlog: 128,
         connect_timeout_secs: 5,
+        client_timeout_secs: 300,
+        server_timeout_secs: 300,
+        auth_timeout_secs: 30,
     };
 
     let cancel_token = CancellationToken::new();
@@ -488,6 +494,9 @@ async fn test_proxy_duration_shutdown() {
         shared_no_capture: None,
         listen_backlog: 128,
         connect_timeout_secs: 5,
+        client_timeout_secs: 300,
+        server_timeout_secs: 300,
+        auth_timeout_secs: 30,
     };
 
     let cancel_token = CancellationToken::new();

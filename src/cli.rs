@@ -338,6 +338,18 @@ pub struct ProxyArgs {
     /// Timeout in seconds for connecting to the target database (default 5)
     #[arg(long, default_value_t = 5)]
     pub connect_timeout: u64,
+
+    /// Client idle timeout in seconds — close if no data received from client within this period (default 300, 0 = no timeout)
+    #[arg(long, default_value_t = 300)]
+    pub client_timeout: u64,
+
+    /// Server idle timeout in seconds — close if no data received from server within this period (default 300, 0 = no timeout)
+    #[arg(long, default_value_t = 300)]
+    pub server_timeout: u64,
+
+    /// Authentication/login timeout in seconds (default 30, 0 = no timeout)
+    #[arg(long, default_value_t = 30)]
+    pub auth_timeout: u64,
 }
 
 #[derive(clap::Args)]

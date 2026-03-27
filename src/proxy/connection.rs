@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -67,6 +67,40 @@ pub struct ImplicitCaptureState {
     pub stealth: bool,
 }
 
+/// Timeout configuration for proxy connections.
+#[derive(Clone, Debug)]
+pub struct TimeoutConfig {
+    /// Client idle read timeout. `None` means no timeout.
+    pub client_timeout: Option<Duration>,
+    /// Server idle read timeout. `None` means no timeout.
+    pub server_timeout: Option<Duration>,
+    /// Authentication phase timeout. `None` means no timeout.
+    pub auth_timeout: Option<Duration>,
+}
+
+impl TimeoutConfig {
+    /// Build from seconds values. 0 means no timeout.
+    pub fn from_secs(client: u64, server: u64, auth: u64) -> Self {
+        Self {
+            client_timeout: if client > 0 {
+                Some(Duration::from_secs(client))
+            } else {
+                None
+            },
+            server_timeout: if server > 0 {
+                Some(Duration::from_secs(server))
+            } else {
+                None
+            },
+            auth_timeout: if auth > 0 {
+                Some(Duration::from_secs(auth))
+            } else {
+                None
+            },
+        }
+    }
+}
+
 /// Handle a single client connection through its full lifecycle.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_connection(
@@ -78,6 +112,7 @@ pub async fn handle_connection(
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
+    timeouts: TimeoutConfig,
 ) {
     if let Err(e) = handle_connection_inner(
         client_stream,
@@ -88,6 +123,7 @@ pub async fn handle_connection(
         metrics_tx,
         correlate,
         implicit_capture,
+        timeouts,
     )
     .await
     {
@@ -105,6 +141,7 @@ async fn handle_connection_inner(
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
+    timeouts: TimeoutConfig,
 ) -> Result<()> {
     // ── Phase 1: Startup ────────────────────────────────────────────
     // Read the first message from client (no type byte — startup message)
@@ -149,8 +186,21 @@ async fn handle_connection_inner(
     // Forward startup message to server
     protocol::write_message(&mut server_stream, &startup_msg).await?;
 
-    // ── Phase 3: Auth passthrough ───────────────────────────────────
-    let auth_complete = relay_auth(&mut client_stream, &mut server_stream).await?;
+    // ── Phase 3: Auth passthrough (with optional timeout) ──────────
+    let auth_complete = if let Some(auth_dur) = timeouts.auth_timeout {
+        match tokio::time::timeout(auth_dur, relay_auth(&mut client_stream, &mut server_stream))
+            .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                warn!("Session {session_id}: auth timeout after {auth_dur:?}");
+                pool.discard().await;
+                bail!("auth timeout");
+            }
+        }
+    } else {
+        relay_auth(&mut client_stream, &mut server_stream).await?
+    };
     if !auth_complete {
         pool.discard().await;
         return Ok(());
@@ -188,6 +238,9 @@ async fn handle_connection_inner(
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // Client → Server relay
+    let client_idle_timeout = timeouts.client_timeout;
+    let server_idle_timeout = timeouts.server_timeout;
+
     let c2s = tokio::spawn({
         let capture_tx = capture_tx.clone();
         let metrics_tx = metrics_tx.clone();
@@ -206,6 +259,7 @@ async fn handle_connection_inner(
                 metrics_tx,
                 correlate,
                 implicit_capture,
+                client_idle_timeout,
             )
             .await
         }
@@ -221,6 +275,7 @@ async fn handle_connection_inner(
             no_capture,
             metrics_tx2,
             correlate,
+            server_idle_timeout,
         )
         .await
     });
@@ -292,6 +347,31 @@ async fn relay_auth(client: &mut TcpStream, server: &mut TcpStream) -> Result<bo
     }
 }
 
+/// Read a protocol message with an optional idle timeout.
+///
+/// Returns `Ok(Some(msg))` on success, `Ok(None)` on disconnect or timeout.
+/// On timeout, logs a warning and returns `None` to close the relay loop gracefully.
+async fn read_with_timeout<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    timeout: Option<Duration>,
+    session_id: u64,
+    side: &str,
+) -> Result<Option<protocol::PgMessage>> {
+    if let Some(dur) = timeout {
+        match tokio::time::timeout(dur, protocol::read_message(reader)).await {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    "Session {session_id}: {side} idle timeout after {dur:?}, closing connection"
+                );
+                Ok(None)
+            }
+        }
+    } else {
+        protocol::read_message(reader).await
+    }
+}
+
 /// Relay messages from client to server, extracting capture data.
 #[allow(clippy::too_many_arguments)]
 async fn relay_client_to_server(
@@ -304,11 +384,12 @@ async fn relay_client_to_server(
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
+    idle_timeout: Option<Duration>,
 ) -> Result<()> {
     loop {
-        let msg = match protocol::read_message(&mut client).await? {
+        let msg = match read_with_timeout(&mut client, idle_timeout, session_id, "client").await? {
             Some(m) => m,
-            None => break, // Client disconnected
+            None => break, // Client disconnected or timed out
         };
 
         if !no_capture.load(Ordering::Relaxed) {
@@ -436,6 +517,7 @@ const MAX_RETURNING_COLUMNS: usize = 20;
 const MAX_RETURNING_ROWS: usize = 100;
 
 /// Relay messages from server to client, extracting capture data.
+#[allow(clippy::too_many_arguments)]
 async fn relay_server_to_client(
     mut server: BufReader<ReadHalf<TcpStream>>,
     mut client: BufWriter<WriteHalf<TcpStream>>,
@@ -444,11 +526,12 @@ async fn relay_server_to_client(
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
+    idle_timeout: Option<Duration>,
 ) -> Result<()> {
     loop {
-        let msg = match protocol::read_message(&mut server).await? {
+        let msg = match read_with_timeout(&mut server, idle_timeout, session_id, "server").await? {
             Some(m) => m,
-            None => break, // Server disconnected
+            None => break, // Server disconnected or timed out
         };
 
         if !no_capture.load(Ordering::Relaxed) {
@@ -708,5 +791,74 @@ mod tests {
             stealth: false,
         };
         assert!(!state.stealth);
+    }
+
+    #[test]
+    fn test_timeout_config_from_secs_zero_means_no_timeout() {
+        let tc = TimeoutConfig::from_secs(0, 0, 0);
+        assert!(tc.client_timeout.is_none());
+        assert!(tc.server_timeout.is_none());
+        assert!(tc.auth_timeout.is_none());
+    }
+
+    #[test]
+    fn test_timeout_config_from_secs_nonzero() {
+        let tc = TimeoutConfig::from_secs(300, 600, 30);
+        assert_eq!(tc.client_timeout, Some(Duration::from_secs(300)));
+        assert_eq!(tc.server_timeout, Some(Duration::from_secs(600)));
+        assert_eq!(tc.auth_timeout, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_timeout_config_mixed() {
+        // Only auth timeout enabled
+        let tc = TimeoutConfig::from_secs(0, 0, 15);
+        assert!(tc.client_timeout.is_none());
+        assert!(tc.server_timeout.is_none());
+        assert_eq!(tc.auth_timeout, Some(Duration::from_secs(15)));
+    }
+
+    #[tokio::test]
+    async fn test_read_with_timeout_no_timeout_returns_none_on_eof() {
+        // Simulate an empty reader (EOF) with no timeout
+        let data: &[u8] = &[];
+        let mut cursor = std::io::Cursor::new(data);
+        let result = read_with_timeout(&mut cursor, None, 1, "test").await;
+        // EOF produces Ok(None)
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_with_timeout_triggers_on_empty_reader() {
+        // Simulate a timeout with a reader that never returns data.
+        // We use a tokio::io::pending() which never completes.
+        let timeout = Some(Duration::from_millis(50));
+        let mut reader = tokio::io::empty(); // Returns EOF immediately
+        let result = read_with_timeout(&mut reader, timeout, 1, "test").await;
+        // empty() returns EOF, so we get Ok(None) rather than timeout
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_with_timeout_fires_on_stalled_reader() {
+        // Create a reader that blocks forever using duplex with a held sender.
+        let timeout = Some(Duration::from_millis(50));
+
+        // Hold both ends so the reader blocks (no EOF, no data)
+        let (tx, rx) = tokio::io::duplex(64);
+        let mut reader = tokio::io::BufReader::new(rx);
+
+        let start = std::time::Instant::now();
+        let result = read_with_timeout(&mut reader, timeout, 42, "test").await;
+        let elapsed = start.elapsed();
+
+        // Should timeout and return Ok(None)
+        assert!(result.unwrap().is_none());
+        // Should have taken roughly 50ms (not zero, not 300s)
+        assert!(elapsed >= Duration::from_millis(40));
+        assert!(elapsed < Duration::from_secs(1));
+
+        // Keep tx alive to prevent EOF
+        drop(tx);
     }
 }
