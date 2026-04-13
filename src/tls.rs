@@ -146,9 +146,12 @@ mod tests {
 
     #[test]
     fn test_build_tls_acceptor_valid_self_signed() {
-        // Uses pre-generated self-signed test cert/key from fixtures
-        let cert_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-cert.pem");
-        let key_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-key.pem");
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, cert.cert.pem()).unwrap();
+        std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
 
         let result = build_tls_acceptor(&cert_path, &key_path);
         assert!(result.is_ok(), "should build acceptor: {:?}", result.err());

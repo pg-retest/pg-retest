@@ -7,3 +7,9 @@ audits/
 launch/
 skill-output/
 .autonomy/
+*.pem
+*.key
+*.p12
+.env*
+/data/
+proxy-capture.db
