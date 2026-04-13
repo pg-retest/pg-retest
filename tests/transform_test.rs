@@ -104,7 +104,7 @@ fn test_analyze_separate_groups() {
     let profile = sample_profile();
     let analysis = analyze_workload(&profile);
 
-    assert!(analysis.query_groups.len() >= 1);
+    assert!(!analysis.query_groups.is_empty());
     assert_eq!(analysis.profile_summary.total_queries, 6);
     assert_eq!(analysis.profile_summary.total_sessions, 2);
 }
