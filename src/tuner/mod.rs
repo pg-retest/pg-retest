@@ -73,8 +73,27 @@ pub async fn run_tuning_with_events(
         ReplayMode::ReadWrite
     };
 
-    info!("Collecting baseline replay...");
+    // Baseline replay: run the workload TWICE and keep the second pass.
+    // The first pass warms the PostgreSQL buffer cache; cold-cache numbers are
+    // not comparable to subsequent iteration runs which hit a warm cache, so
+    // without this warm-up every iteration's apparent improvement is really
+    // "I benefited from the previous iteration's cache warmup, not from the
+    // change I just applied." Running the warmup once before measuring gives
+    // iterations a fair baseline to compare against.
+    info!("Collecting baseline replay (warming buffer cache)...");
     send_event(TuningEvent::BaselineStarted);
+    let _warmup_results = replay::session::run_replay(
+        &profile,
+        &config.target,
+        replay_mode,
+        config.speed,
+        None,
+        config.tls.clone(),
+        crate::correlate::IdMode::None,
+    )
+    .await?;
+
+    info!("Collecting baseline replay (measurement pass)...");
     let baseline_results = replay::session::run_replay(
         &profile,
         &config.target,
@@ -214,18 +233,25 @@ pub async fn run_tuning_with_events(
         let iter_report =
             compare::compute_comparison(&profile, &replay_results, 20.0, Some(replay_mode));
 
-        // Compare vs baseline
+        // Compare this iteration's replay against the baseline REPLAY on the
+        // same target (not against the source-side captured timings). Comparing
+        // against source is wrong: source timings come from whatever system the
+        // workload was originally captured on, which may be on different
+        // hardware, different data sizes, or a different network path than the
+        // tuning target. That would make every iteration look like a regression
+        // whenever the target is "further away" than the source, regardless of
+        // whether the applied change helped.
         let comparison = ComparisonSummary {
             p50_change_pct: pct_change(
-                baseline_report.source_p50_latency_us,
+                baseline_report.replay_p50_latency_us,
                 iter_report.replay_p50_latency_us,
             ),
             p95_change_pct: pct_change(
-                baseline_report.source_p95_latency_us,
+                baseline_report.replay_p95_latency_us,
                 iter_report.replay_p95_latency_us,
             ),
             p99_change_pct: pct_change(
-                baseline_report.source_p99_latency_us,
+                baseline_report.replay_p99_latency_us,
                 iter_report.replay_p99_latency_us,
             ),
             regressions: iter_report.regressions.len(),

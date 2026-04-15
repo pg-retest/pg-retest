@@ -29,6 +29,20 @@ pub struct AdvisorConfig {
     pub model: Option<String>,
 }
 
+/// Normalize a user-supplied base URL so downstream `format!("{}/v1/...")` calls
+/// always produce a single, correct path. Strips trailing slashes and any of the
+/// common `/v1`, `/v1/`, `/v1beta`, `/v1beta/` suffixes that users paste when they
+/// copy an OpenAI-compatible endpoint URL out of another tool's config.
+pub fn normalize_base_url(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    for suffix in ["/v1beta", "/v1"] {
+        if let Some(stripped) = trimmed.strip_suffix(suffix) {
+            return stripped.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Create a TuningAdvisor from config.
 pub fn create_advisor(config: AdvisorConfig) -> Box<dyn TuningAdvisor> {
     match config.provider {
@@ -36,9 +50,11 @@ pub fn create_advisor(config: AdvisorConfig) -> Box<dyn TuningAdvisor> {
             let model = config
                 .model
                 .unwrap_or_else(|| "claude-sonnet-4-20250514".into());
-            let url = config
-                .api_url
-                .unwrap_or_else(|| "https://api.anthropic.com".into());
+            let url = normalize_base_url(
+                &config
+                    .api_url
+                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
+            );
             Box::new(ClaudeAdvisor {
                 api_key: config.api_key,
                 model,
@@ -47,9 +63,11 @@ pub fn create_advisor(config: AdvisorConfig) -> Box<dyn TuningAdvisor> {
         }
         LlmProvider::OpenAi => {
             let model = config.model.unwrap_or_else(|| "gpt-4o".into());
-            let url = config
-                .api_url
-                .unwrap_or_else(|| "https://api.openai.com".into());
+            let url = normalize_base_url(
+                &config
+                    .api_url
+                    .unwrap_or_else(|| "https://api.openai.com".into()),
+            );
             Box::new(OpenAiAdvisor {
                 api_key: config.api_key,
                 model,
@@ -58,9 +76,11 @@ pub fn create_advisor(config: AdvisorConfig) -> Box<dyn TuningAdvisor> {
         }
         LlmProvider::Gemini => {
             let model = config.model.unwrap_or_else(|| "gemini-2.5-flash".into());
-            let url = config
-                .api_url
-                .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+            let url = normalize_base_url(
+                &config
+                    .api_url
+                    .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into()),
+            );
             Box::new(GeminiAdvisor {
                 api_key: config.api_key,
                 model,
@@ -78,9 +98,11 @@ pub fn create_advisor(config: AdvisorConfig) -> Box<dyn TuningAdvisor> {
         }
         LlmProvider::Ollama => {
             let model = config.model.unwrap_or_else(|| "llama3".into());
-            let url = config
-                .api_url
-                .unwrap_or_else(|| "http://localhost:11434".into());
+            let url = normalize_base_url(
+                &config
+                    .api_url
+                    .unwrap_or_else(|| "http://localhost:11434".into()),
+            );
             Box::new(OllamaAdvisor {
                 model,
                 base_url: url,
@@ -651,15 +673,60 @@ impl TuningAdvisor for OllamaAdvisor {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Ollama response missing 'response' field"))?;
 
-        let recs: Vec<Recommendation> = serde_json::from_str(response_text)
-            .map_err(|e| anyhow::anyhow!("Failed to parse Ollama recommendations: {e}"))?;
-
-        Ok(recs)
+        parse_ollama_recommendations(response_text)
     }
 
     fn name(&self) -> &str {
         "Ollama"
     }
+}
+
+/// Parse Ollama's JSON response into a list of recommendations.
+///
+/// Small local models (e.g. llama3.2:1b) don't reliably produce the exact shape
+/// the prompt asks for. Accept any of:
+///   1. A top-level JSON array of recommendations: `[{...}, {...}]`
+///   2. A single top-level recommendation object: `{"type": "config_change", ...}`
+///   3. A wrapper object with a recommendations key: `{"recommendations": [...]}`
+///      (or `"tools"`, `"calls"`, `"items"` as common aliases)
+/// If none of those shapes parse, return an actionable error that includes the
+/// first 200 chars of what the model actually returned so the user can debug.
+fn parse_ollama_recommendations(response_text: &str) -> Result<Vec<Recommendation>> {
+    let text = response_text.trim();
+
+    // Shape 1: direct array of recommendations
+    if let Ok(recs) = serde_json::from_str::<Vec<Recommendation>>(text) {
+        return Ok(recs);
+    }
+
+    // Shape 2: single top-level recommendation object
+    if let Ok(rec) = serde_json::from_str::<Recommendation>(text) {
+        return Ok(vec![rec]);
+    }
+
+    // Shape 3: wrapper object with a known key holding the array
+    if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(text) {
+        for key in ["recommendations", "tools", "calls", "items", "changes"] {
+            if let Some(arr) = wrapper.get(key).and_then(|v| v.as_array()) {
+                let mut recs = Vec::new();
+                for item in arr {
+                    if let Ok(rec) = serde_json::from_value::<Recommendation>(item.clone()) {
+                        recs.push(rec);
+                    }
+                }
+                if !recs.is_empty() {
+                    return Ok(recs);
+                }
+            }
+        }
+    }
+
+    let preview: String = text.chars().take(200).collect();
+    anyhow::bail!(
+        "Failed to parse Ollama recommendations. Expected a JSON array of \
+         recommendation objects, a single recommendation object, or a wrapper \
+         object with a 'recommendations' key. Got (first 200 chars): {preview}"
+    )
 }
 
 #[cfg(test)]
@@ -697,5 +764,91 @@ mod tests {
         assert!(prompt.contains("create_index"));
         assert!(prompt.contains("query_rewrite"));
         assert!(prompt.contains("schema_change"));
+    }
+
+    #[test]
+    fn test_normalize_base_url_strips_trailing_slash() {
+        assert_eq!(normalize_base_url("http://host:8000/"), "http://host:8000");
+    }
+
+    #[test]
+    fn test_normalize_base_url_strips_v1_suffix() {
+        assert_eq!(
+            normalize_base_url("http://192.168.1.193:8000/v1"),
+            "http://192.168.1.193:8000"
+        );
+        assert_eq!(
+            normalize_base_url("http://192.168.1.193:8000/v1/"),
+            "http://192.168.1.193:8000"
+        );
+    }
+
+    #[test]
+    fn test_normalize_base_url_strips_v1beta_suffix() {
+        assert_eq!(
+            normalize_base_url("https://generativelanguage.googleapis.com/v1beta"),
+            "https://generativelanguage.googleapis.com"
+        );
+    }
+
+    #[test]
+    fn test_normalize_base_url_leaves_clean_url_alone() {
+        assert_eq!(
+            normalize_base_url("https://api.anthropic.com"),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            normalize_base_url("http://localhost:11434"),
+            "http://localhost:11434"
+        );
+    }
+
+    #[test]
+    fn test_normalize_base_url_preserves_path_that_isnt_v1() {
+        // Paths that look like API prefixes but aren't /v1 should be left alone.
+        assert_eq!(
+            normalize_base_url("http://proxy/llm/openai"),
+            "http://proxy/llm/openai"
+        );
+    }
+
+    #[test]
+    fn test_parse_ollama_recs_direct_array() {
+        let resp = r#"[
+            {"type": "config_change", "parameter": "work_mem", "current_value": "4MB",
+             "recommended_value": "16MB", "rationale": "big sorts"}
+        ]"#;
+        let recs = parse_ollama_recommendations(resp).unwrap();
+        assert_eq!(recs.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ollama_recs_single_object() {
+        // llama3.2:1b and similar small models often emit a single rec, not an array
+        let resp = r#"{"type": "config_change", "parameter": "work_mem",
+             "current_value": "4MB", "recommended_value": "16MB",
+             "rationale": "big sorts"}"#;
+        let recs = parse_ollama_recommendations(resp).unwrap();
+        assert_eq!(recs.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ollama_recs_wrapper_object() {
+        let resp = r#"{
+            "recommendations": [
+                {"type": "create_index", "table": "orders", "columns": ["customer_id"],
+                 "sql": "CREATE INDEX foo ON orders(customer_id)", "rationale": "hot query"}
+            ]
+        }"#;
+        let recs = parse_ollama_recommendations(resp).unwrap();
+        assert_eq!(recs.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ollama_recs_garbage_returns_useful_error() {
+        let resp = "I'm sorry Dave, I can't do that.";
+        let err = parse_ollama_recommendations(resp).unwrap_err().to_string();
+        assert!(err.contains("Failed to parse Ollama recommendations"));
+        assert!(err.contains("I'm sorry Dave"));
     }
 }
