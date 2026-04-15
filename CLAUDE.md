@@ -106,7 +106,9 @@ Key modules:
 - `web::handlers::tuning` — Tuning API endpoints (start, status, cancel) for web dashboard
 - `web::handlers::demo` — Demo mode handlers (wizard steps, scenario cards, DB reset)
 - `proxy::staging` — SQLite staging for capture data (batched insert, read-back, cleanup, crash recovery)
-- `proxy::control` — Minimal HTTP control endpoint for standalone persistent proxy
+- `proxy::control` — Minimal HTTP control endpoint for standalone persistent proxy, exposes `/status` and `/metrics`
+- `proxy::metrics` — Prometheus-shaped `ProxyMetrics` struct with atomic counters for connections (total/active/rejected), queries, bytes in/out, errors, backend health, uptime, plus a `render(pool_active, pool_idle)` function returning text-exposition format
+- `proxy::health` — Credential-free backend health check task. Periodic TCP + PG SSLRequest probe; flips `backend_degraded` after N consecutive failures. Configured via `--health-check-interval`, `--health-check-timeout`, `--health-check-fail-threshold`
 - `tls` — TLS connector builder (`TlsMode` enum: Disable/Prefer/Require), used by replay and tuner. `make_tls_connector()` with optional CA cert path.
 - `web::auth` — Bearer token auth middleware for Axum dashboard
 
@@ -175,6 +177,11 @@ Key modules:
 - Proxy control port: standalone persistent proxy exposes HTTP control on `--control-port` (default 9091). Web mode uses existing `/api/v1/proxy/*` endpoints instead.
 - `proxy-ctl` auto-detects web vs standalone by trying `GET /api/v1/health`.
 - `no_capture` is `Arc<AtomicBool>` shared across all relay connections — toggled at runtime for persistent capture start/stop.
+- Proxy `/metrics` endpoint on the control port returns Prometheus text-exposition format. `connections_total`, `connections_active`, `connections_rejected_total{reason}`, `pool_active`, `pool_idle`, `backend_degraded`, `backend_healthchecks_{ok,fail}_total`, `uptime_seconds` are wired. `queries_total`/`bytes_*_total`/`errors_total` are present but not yet incremented from the hot-path relay loops (follow-up).
+- Proxy backend health check spawns a background task on startup when `--health-check-interval > 0` (default 30s). Probes the target via `TcpStream::connect` + PG SSLRequest (credential-free). After `--health-check-fail-threshold` consecutive failures (default 3), flips `backend_degraded=1` and logs a WARN. A single success clears the flag.
+- Tuner `--api-url` is normalized: trailing `/v1`, `/v1/`, `/v1beta`, `/v1beta/`, and `/` are stripped before appending the provider-specific path, so pasting `http://host:8000/v1` from another tool's config works for all HTTP advisors (Claude, OpenAI, Gemini, Ollama).
+- Tuner Ollama response parser accepts three JSON shapes: a top-level array, a single recommendation object, or a wrapper object with `recommendations`/`tools`/`calls`/`items`/`changes` as the key. Small local models (llama3.2:1b, qwen:0.5b) rarely produce the array shape. Garbage responses return an error with the first 200 chars of the model output.
+- Tuner baseline: runs replay twice on startup (warmup + measurement pass) so the PostgreSQL buffer cache is warm before the measured baseline. Iteration results are compared against this baseline replay, not against source-side captured timings, so `target != source_host` deployments don't get spurious "everything is a regression" signals.
 - Web dashboard: default bind changed from `0.0.0.0` to `127.0.0.1`. Docker containers must use `--bind 0.0.0.0`. Auth token is auto-generated on startup; use `--no-auth` for development.
 - TLS: `--tls-mode` defaults to `prefer`. Supported modes: `disable`, `prefer`, `require`. Uses `tokio-postgres-rustls` with system CAs by default, or `--tls-ca-cert` for custom CA.
 - Replay: `--max-connections` limits concurrent DB connections via `tokio::sync::Semaphore`. Default unlimited (backward compatible).
