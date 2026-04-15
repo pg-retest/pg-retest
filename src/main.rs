@@ -591,6 +591,9 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         max_connections_per_ip: args.max_connections_per_ip,
         shutdown_timeout_secs: args.shutdown_timeout,
         client_tls_acceptor,
+        health_check_interval_secs: args.health_check_interval,
+        health_check_timeout_secs: args.health_check_timeout,
+        health_check_fail_threshold: args.health_check_fail_threshold,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

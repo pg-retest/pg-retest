@@ -3,7 +3,8 @@ use pg_retest::replay::{QueryResult, ReplayMode, ReplayResults};
 
 #[test]
 fn test_replay_mode_read_only_filters_dml() {
-    let queries = [Query {
+    let queries = [
+        Query {
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -26,7 +27,8 @@ fn test_replay_mode_read_only_filters_dml() {
             kind: QueryKind::Select,
             transaction_id: None,
             response_values: None,
-        }];
+        },
+    ];
 
     let filtered: Vec<&Query> = queries
         .iter()
@@ -40,7 +42,8 @@ fn test_replay_mode_read_only_filters_dml() {
 
 #[test]
 fn test_replay_mode_read_write_keeps_all() {
-    let queries = [Query {
+    let queries = [
+        Query {
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -55,7 +58,8 @@ fn test_replay_mode_read_write_keeps_all() {
             kind: QueryKind::Insert,
             transaction_id: None,
             response_values: None,
-        }];
+        },
+    ];
 
     let filtered: Vec<&Query> = queries
         .iter()
@@ -98,7 +102,8 @@ fn test_replay_results_structure() {
 #[test]
 fn test_read_only_mode_filters_transaction_control() {
     // In read-only mode, BEGIN/COMMIT/ROLLBACK should be filtered out
-    let queries = [Query {
+    let queries = [
+        Query {
             sql: "BEGIN".into(),
             start_offset_us: 0,
             duration_us: 10,
@@ -129,7 +134,8 @@ fn test_read_only_mode_filters_transaction_control() {
             kind: QueryKind::Commit,
             transaction_id: Some(1),
             response_values: None,
-        }];
+        },
+    ];
 
     let filtered: Vec<&Query> = queries
         .iter()
@@ -142,7 +148,8 @@ fn test_read_only_mode_filters_transaction_control() {
 
 #[test]
 fn test_read_write_mode_keeps_transaction_control() {
-    let queries = [Query {
+    let queries = [
+        Query {
             sql: "BEGIN".into(),
             start_offset_us: 0,
             duration_us: 10,
@@ -165,7 +172,8 @@ fn test_read_write_mode_keeps_transaction_control() {
             kind: QueryKind::Commit,
             transaction_id: Some(1),
             response_values: None,
-        }];
+        },
+    ];
 
     let filtered: Vec<&Query> = queries
         .iter()

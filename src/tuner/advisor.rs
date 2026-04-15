@@ -685,10 +685,12 @@ impl TuningAdvisor for OllamaAdvisor {
 ///
 /// Small local models (e.g. llama3.2:1b) don't reliably produce the exact shape
 /// the prompt asks for. Accept any of:
-///   1. A top-level JSON array of recommendations: `[{...}, {...}]`
-///   2. A single top-level recommendation object: `{"type": "config_change", ...}`
-///   3. A wrapper object with a recommendations key: `{"recommendations": [...]}`
-///      (or `"tools"`, `"calls"`, `"items"` as common aliases)
+///
+/// 1. A top-level JSON array of recommendations: `[{...}, {...}]`
+/// 2. A single top-level recommendation object: `{"type": "config_change", ...}`
+/// 3. A wrapper object with a recommendations key: `{"recommendations": [...]}`
+///    (or `"tools"`, `"calls"`, `"items"` as common aliases)
+///
 /// If none of those shapes parse, return an actionable error that includes the
 /// first 200 chars of what the model actually returned so the user can debug.
 fn parse_ollama_recommendations(response_text: &str) -> Result<Vec<Recommendation>> {

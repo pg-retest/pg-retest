@@ -123,6 +123,9 @@ pub async fn start_proxy(
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 30,
         client_tls_acceptor: None,
+        health_check_interval_secs: 30,
+        health_check_timeout_secs: 5,
+        health_check_fail_threshold: 3,
     };
 
     let listen = req.listen.clone();

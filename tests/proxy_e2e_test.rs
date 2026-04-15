@@ -89,6 +89,9 @@ async fn start_proxy(
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 5,
         client_tls_acceptor: None,
+        health_check_interval_secs: 0,
+        health_check_timeout_secs: 5,
+        health_check_fail_threshold: 3,
     };
 
     let cancel_token = CancellationToken::new();
@@ -425,6 +428,9 @@ async fn test_proxy_no_capture_mode() {
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 5,
         client_tls_acceptor: None,
+        health_check_interval_secs: 0,
+        health_check_timeout_secs: 5,
+        health_check_fail_threshold: 3,
     };
 
     let cancel_token = CancellationToken::new();
@@ -518,6 +524,9 @@ async fn test_proxy_duration_shutdown() {
         max_connections_per_ip: 0,
         shutdown_timeout_secs: 5,
         client_tls_acceptor: None,
+        health_check_interval_secs: 0,
+        health_check_timeout_secs: 5,
+        health_check_fail_threshold: 3,
     };
 
     let cancel_token = CancellationToken::new();

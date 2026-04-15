@@ -12,6 +12,7 @@ use tracing::{info, warn};
 
 use super::capture::CaptureEvent;
 use super::connection::{handle_connection, CorrelateState, ImplicitCaptureState, TimeoutConfig};
+use super::metrics::ProxyMetrics;
 use super::pool::SessionPool;
 use super::protocol::build_error_response;
 use super::socket;
@@ -40,6 +41,21 @@ impl Drop for IpConnectionGuard {
     }
 }
 
+/// RAII guard that decrements `connections_active` on the metrics struct
+/// when dropped. Paired with `record_accept()` at the point of acceptance
+/// so the active-connection gauge stays balanced even on early returns.
+struct MetricsActiveGuard {
+    metrics: Option<Arc<ProxyMetrics>>,
+}
+
+impl Drop for MetricsActiveGuard {
+    fn drop(&mut self) {
+        if let Some(m) = &self.metrics {
+            m.record_close();
+        }
+    }
+}
+
 /// Run the TCP accept loop.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_listener(
@@ -53,6 +69,7 @@ pub async fn run_listener(
     timeouts: TimeoutConfig,
     max_connections_per_ip: u32,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
+    proxy_metrics: Option<Arc<ProxyMetrics>>,
 ) -> Result<()> {
     let session_counter = AtomicU64::new(1);
     let addr = listener.local_addr()?;
@@ -84,6 +101,9 @@ pub async fn run_listener(
                 if let Some(entry) = ip_map.get(&ip) {
                     entry.value().fetch_sub(1, Ordering::Relaxed);
                 }
+                if let Some(m) = &proxy_metrics {
+                    m.record_reject_per_ip();
+                }
                 warn!(
                     "Connection from {peer_addr} rejected: {current} connections exceeds \
                      per-IP limit of {max_connections_per_ip}"
@@ -97,6 +117,12 @@ pub async fn run_listener(
                 let _ = client_stream.shutdown().await;
                 continue;
             }
+        }
+
+        // Accept counted after all rejection paths so we don't inflate numbers
+        // with connections that were refused before ever running a handler.
+        if let Some(m) = &proxy_metrics {
+            m.record_accept();
         }
 
         let session_id = session_counter.fetch_add(1, Ordering::Relaxed);
@@ -129,6 +155,10 @@ pub async fn run_listener(
             None
         };
 
+        let metrics_guard = MetricsActiveGuard {
+            metrics: proxy_metrics.clone(),
+        };
+
         tokio::spawn(async move {
             handle_connection(
                 client_stream,
@@ -143,8 +173,9 @@ pub async fn run_listener(
                 tls_acceptor,
             )
             .await;
-            // ip_guard is dropped here, decrementing the counter
+            // ip_guard and metrics_guard are dropped here, decrementing counters
             drop(ip_guard);
+            drop(metrics_guard);
         });
     }
 }

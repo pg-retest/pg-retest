@@ -1,7 +1,9 @@
 pub mod capture;
 pub mod connection;
 pub mod control;
+pub mod health;
 pub mod listener;
+pub mod metrics;
 pub mod pool;
 pub mod protocol;
 pub mod socket;
@@ -25,6 +27,8 @@ use self::capture::{
 };
 use self::connection::{ImplicitCaptureState, TimeoutConfig};
 use self::control::{build_control_router, CaptureCommand, ControlState};
+use self::health::{spawn_health_check, HealthCheckConfig};
+use self::metrics::ProxyMetrics;
 use self::pool::SessionPool;
 use self::staging::StagingDb;
 use crate::correlate::sequence::SequenceState;
@@ -96,6 +100,14 @@ pub struct ProxyConfig {
     /// Optional TLS acceptor for client-facing connections.
     /// When set, the proxy accepts SSLRequest from clients and upgrades connections to TLS.
     pub client_tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
+    /// Backend health check interval in seconds (default 30). 0 disables health checks.
+    /// The health check opens a fresh TCP connection to the target and verifies the
+    /// PostgreSQL SSLRequest handshake succeeds. Credential-free.
+    pub health_check_interval_secs: u64,
+    /// Per-probe timeout for the health check in seconds (default 5).
+    pub health_check_timeout_secs: u64,
+    /// Consecutive failed probes before flipping the `backend_degraded` metric (default 3).
+    pub health_check_fail_threshold: u64,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -164,6 +176,22 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     // Spawn idle reaper if configured
     let _reaper_handle = pool.spawn_idle_reaper(CancellationToken::new());
 
+    // Proxy-wide metrics (connections, traffic, backend health)
+    let proxy_metrics = Arc::new(ProxyMetrics::new());
+
+    // Spawn backend health check probe
+    let health_cancel = CancellationToken::new();
+    let _health_handle = spawn_health_check(
+        config.target_addr.clone(),
+        proxy_metrics.clone(),
+        HealthCheckConfig {
+            interval_secs: config.health_check_interval_secs,
+            timeout_secs: config.health_check_timeout_secs,
+            fail_threshold: config.health_check_fail_threshold,
+        },
+        health_cancel.clone(),
+    );
+
     let (capture_tx, capture_rx) = mpsc::unbounded_channel();
 
     // Spawn capture collector
@@ -177,6 +205,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let tls_acceptor = config.client_tls_acceptor.map(Arc::new);
+    let listener_metrics = proxy_metrics.clone();
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -189,6 +218,7 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
             timeouts,
             max_conns_per_ip,
             tls_acceptor,
+            Some(listener_metrics),
         )
         .await
     });
@@ -297,6 +327,22 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     // Spawn idle reaper if configured
     let _reaper_handle = pool.spawn_idle_reaper(CancellationToken::new());
 
+    // Proxy-wide metrics (connections, traffic, backend health)
+    let proxy_metrics = Arc::new(ProxyMetrics::new());
+
+    // Spawn backend health check probe
+    let health_cancel = CancellationToken::new();
+    let _health_handle = spawn_health_check(
+        config.target_addr.clone(),
+        proxy_metrics.clone(),
+        HealthCheckConfig {
+            interval_secs: config.health_check_interval_secs,
+            timeout_secs: config.health_check_timeout_secs,
+            fail_threshold: config.health_check_fail_threshold,
+        },
+        health_cancel.clone(),
+    );
+
     // Shared no_capture flag — starts as true (no capture until start-capture is called)
     let no_capture = Arc::new(AtomicBool::new(true));
 
@@ -314,6 +360,8 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
         started_at: Instant::now(),
         capture_cmd_tx: Some(cmd_tx),
         staging_db: None, // Set after staging_db is opened below
+        metrics: Some(proxy_metrics.clone()),
+        pool: Some(pool.clone()),
     }));
 
     // Start the control HTTP endpoint
@@ -348,6 +396,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let tls_acceptor_persistent = config.client_tls_acceptor.map(Arc::new);
+    let listener_metrics_persistent = proxy_metrics.clone();
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -360,6 +409,7 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             timeouts,
             max_conns_per_ip_persistent,
             tls_acceptor_persistent,
+            Some(listener_metrics_persistent),
         )
         .await
     });
@@ -748,6 +798,7 @@ pub async fn run_proxy_managed(
             timeouts,
             max_conns_per_ip_managed,
             tls_acceptor_managed,
+            None,
         )
         .await
     });
@@ -870,6 +921,7 @@ async fn run_proxy_managed_multi(
             timeouts,
             max_conns_per_ip_multi,
             tls_acceptor_multi,
+            None,
         )
         .await
     });

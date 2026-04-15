@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::State;
+use axum::http::{header, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -36,6 +38,10 @@ pub struct ControlState {
     pub started_at: Instant,
     pub capture_cmd_tx: Option<tokio::sync::mpsc::UnboundedSender<CaptureCommand>>,
     pub staging_db: Option<super::staging::StagingDb>,
+    /// Aggregated proxy metrics for the Prometheus `/metrics` endpoint.
+    pub metrics: Option<Arc<super::metrics::ProxyMetrics>>,
+    /// Session pool handle so `/metrics` can read current pool utilization.
+    pub pool: Option<Arc<super::pool::SessionPool>>,
 }
 
 type SharedState = Arc<RwLock<ControlState>>;
@@ -44,11 +50,40 @@ type SharedState = Arc<RwLock<ControlState>>;
 pub fn build_control_router(state: SharedState) -> Router {
     Router::new()
         .route("/status", get(status_handler))
+        .route("/metrics", get(metrics_handler))
         .route("/start-capture", post(start_capture_handler))
         .route("/stop-capture", post(stop_capture_handler))
         .route("/recover", post(recover_handler))
         .route("/discard", post(discard_handler))
         .with_state(state)
+}
+
+/// Prometheus text-exposition endpoint. Returns 503 if the proxy wasn't
+/// started with metrics wired in (e.g. legacy call paths that don't yet
+/// thread the ProxyMetrics struct through).
+async fn metrics_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let s = state.read().await;
+    let (metrics, pool) = match (&s.metrics, &s.pool) {
+        (Some(m), Some(p)) => (m.clone(), p.clone()),
+        _ => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                "# pg-retest proxy metrics unavailable: proxy was started \
+                 without metrics wiring.\n"
+                    .to_string(),
+            );
+        }
+    };
+    drop(s);
+
+    let (pool_active, pool_idle) = pool.stats().await;
+    let body = metrics.render(pool_active, pool_idle);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
 }
 
 async fn status_handler(State(state): State<SharedState>) -> Json<serde_json::Value> {
@@ -231,6 +266,8 @@ mod tests {
             started_at: Instant::now(),
             capture_cmd_tx: if with_tx { Some(tx) } else { None },
             staging_db: None,
+            metrics: None,
+            pool: None,
         }))
     }
 
@@ -311,6 +348,8 @@ mod tests {
             started_at: Instant::now(),
             capture_cmd_tx: None,
             staging_db: None,
+            metrics: None,
+            pool: None,
         }));
         let app = build_control_router(state);
 

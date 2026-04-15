@@ -390,6 +390,20 @@ pub struct ProxyArgs {
     /// Must be provided together with --client-tls-cert.
     #[arg(long)]
     pub client_tls_key: Option<PathBuf>,
+
+    /// Backend health check interval in seconds (default 30). 0 disables health checks.
+    /// The health check opens a fresh TCP connection to the target, sends a PG
+    /// SSLRequest, and verifies the server responds. Credential-free.
+    #[arg(long, default_value_t = 30)]
+    pub health_check_interval: u64,
+
+    /// Per-probe timeout for the health check in seconds (default 5).
+    #[arg(long, default_value_t = 5)]
+    pub health_check_timeout: u64,
+
+    /// Consecutive failed probes before flipping the degraded flag (default 3).
+    #[arg(long, default_value_t = 3)]
+    pub health_check_fail_threshold: u64,
 }
 
 #[derive(clap::Args)]
