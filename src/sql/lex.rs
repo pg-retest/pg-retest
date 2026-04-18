@@ -71,7 +71,32 @@ impl<'a> Iterator for SqlLexer<'a> {
             return Some(self.emit(TokenKind::Whitespace, start, end));
         }
 
-        // Identifier (letter or underscore, then alnum/underscore)
+        // Single-quoted string literal (with '' escape)
+        if first == '\'' {
+            let end = scan_single_quoted(rest, start);
+            return Some(self.emit(TokenKind::StringLiteral, start, end));
+        }
+
+        // Dollar-quoted string: $$ or $tag$
+        if first == '$' {
+            if let Some(end) = scan_dollar_quoted(rest, start) {
+                return Some(self.emit(TokenKind::DollarString, start, end));
+            }
+            // Bind param? $1, $42 ...
+            if let Some(end) = scan_bind_param(rest, start) {
+                return Some(self.emit(TokenKind::BindParam, start, end));
+            }
+            // Bare $ — treat as Punct.
+            return Some(self.emit(TokenKind::Punct, start, start + 1));
+        }
+
+        // Double-quoted identifier (with "" escape)
+        if first == '"' {
+            let end = scan_quoted_ident(rest, start);
+            return Some(self.emit(TokenKind::QuotedIdent, start, end));
+        }
+
+        // Identifier
         if first.is_alphabetic() || first == '_' {
             let end = rest
                 .char_indices()
@@ -82,7 +107,7 @@ impl<'a> Iterator for SqlLexer<'a> {
             return Some(self.emit(TokenKind::Ident, start, end));
         }
 
-        // Single-char punctuation fallback — everything not otherwise matched.
+        // Single-char punctuation fallback.
         let end = start + first.len_utf8();
         Some(self.emit(TokenKind::Punct, start, end))
     }
@@ -106,6 +131,84 @@ impl<'a> SqlLexer<'a> {
             span: start..end,
         }
     }
+}
+
+/// Scan a single-quoted string starting at `rest[0]='\''`. Handles `''` escape.
+/// Returns the absolute byte offset of the position AFTER the closing quote,
+/// or end-of-input if unterminated.
+fn scan_single_quoted(rest: &str, start: usize) -> usize {
+    let bytes = rest.as_bytes();
+    let mut i = 1;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                i += 2;
+                continue;
+            }
+            return start + i + 1;
+        }
+        i += 1;
+    }
+    start + bytes.len()
+}
+
+/// Scan a dollar-quoted string starting at `rest[0]='$'`.
+/// Returns Some(end) if a valid dollar-quote was opened and closed (or ran to EOF),
+/// None if the `$` is not an opening dollar-quote (e.g., `$1` bind param, `$,`).
+fn scan_dollar_quoted(rest: &str, start: usize) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    // Tag characters: alphanumeric + underscore.
+    let mut tag_end = 1;
+    while tag_end < bytes.len() {
+        let b = bytes[tag_end];
+        if b.is_ascii_alphanumeric() || b == b'_' {
+            tag_end += 1;
+        } else {
+            break;
+        }
+    }
+    if tag_end >= bytes.len() || bytes[tag_end] != b'$' {
+        return None;
+    }
+    // The opening delimiter is bytes[0..=tag_end], e.g., "$$" or "$tag$".
+    let delim = &rest[..=tag_end];
+    let body_start = tag_end + 1;
+    if let Some(close_rel) = rest[body_start..].find(delim) {
+        Some(start + body_start + close_rel + delim.len())
+    } else {
+        // Unterminated — consume to EOF.
+        Some(start + bytes.len())
+    }
+}
+
+/// Scan a bind parameter `$1`, `$42`, ... starting at `rest[0]='$'`.
+fn scan_bind_param(rest: &str, start: usize) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    if bytes.len() < 2 || !bytes[1].is_ascii_digit() {
+        return None;
+    }
+    let mut i = 2;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    Some(start + i)
+}
+
+/// Scan a double-quoted identifier starting at `rest[0]='"'`. Handles `""` escape.
+fn scan_quoted_ident(rest: &str, start: usize) -> usize {
+    let bytes = rest.as_bytes();
+    let mut i = 1;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                i += 2;
+                continue;
+            }
+            return start + i + 1;
+        }
+        i += 1;
+    }
+    start + bytes.len()
 }
 
 #[cfg(test)]
@@ -158,5 +261,56 @@ mod tests {
         // Non-ASCII letters are valid PG identifiers.
         let sql = "café";
         assert_eq!(kinds(sql), vec![TokenKind::Ident]);
+    }
+
+    #[test]
+    fn lex_single_quoted_string() {
+        assert_eq!(kinds("'hello'"), vec![TokenKind::StringLiteral]);
+        assert_eq!(texts("'hello'"), vec!["'hello'"]);
+    }
+
+    #[test]
+    fn lex_single_quoted_with_escape() {
+        assert_eq!(kinds("'it''s'"), vec![TokenKind::StringLiteral]);
+        assert_eq!(texts("'it''s'"), vec!["'it''s'"]);
+    }
+
+    #[test]
+    fn lex_unterminated_string_consumes_rest() {
+        // Malformed input — lexer must not panic; consume remainder as StringLiteral.
+        assert_eq!(kinds("'unterminated"), vec![TokenKind::StringLiteral]);
+    }
+
+    #[test]
+    fn lex_dollar_string_untagged() {
+        assert_eq!(kinds("$$hello 'world'$$"), vec![TokenKind::DollarString]);
+        assert_eq!(texts("$$hello 'world'$$"), vec!["$$hello 'world'$$"]);
+    }
+
+    #[test]
+    fn lex_dollar_string_tagged() {
+        assert_eq!(kinds("$tag$body$tag$"), vec![TokenKind::DollarString]);
+        assert_eq!(texts("$tag$body$tag$"), vec!["$tag$body$tag$"]);
+    }
+
+    #[test]
+    fn lex_dollar_string_nested_dollar() {
+        // A $foo$ inside a $tag$ body should not close the tagged string.
+        let sql = "$tag$a $foo$ b$tag$";
+        assert_eq!(kinds(sql), vec![TokenKind::DollarString]);
+        assert_eq!(texts(sql), vec![sql]);
+    }
+
+    #[test]
+    fn lex_quoted_identifier() {
+        assert_eq!(kinds("\"my table\""), vec![TokenKind::QuotedIdent]);
+    }
+
+    #[test]
+    fn lex_quoted_identifier_with_escaped_quote() {
+        // PG escapes double-quotes inside quoted idents by doubling them.
+        let sql = "\"he said \"\"hi\"\"\"";
+        assert_eq!(kinds(sql), vec![TokenKind::QuotedIdent]);
+        assert_eq!(texts(sql), vec![sql]);
     }
 }
