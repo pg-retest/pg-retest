@@ -9,6 +9,7 @@ pub mod profile;
 pub mod provision;
 pub mod proxy;
 pub mod replay;
+pub mod sql;
 pub mod tls;
 pub mod transform;
 pub mod tuner;
