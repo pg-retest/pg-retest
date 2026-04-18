@@ -20,6 +20,7 @@ clap = { version = "4", features = ["derive"] }
 csv = "1"
 futures-util = "0.3"
 mime_guess = "2"
+pg_query = "6"
 rand = "0.8"
 rmp-serde = "1"
 regex = "1"
@@ -52,6 +53,9 @@ socket2 = { version = "0.5", features = ["all"] }
 tower = { version = "0.5.3", features = ["util"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 rcgen = "0.13"
+
+[features]
+legacy-returning = []
 
 [[bench]]
 name = "substitute_bench"
