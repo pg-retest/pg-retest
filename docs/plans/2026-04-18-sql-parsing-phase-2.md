@@ -10,11 +10,11 @@
 
 **Mission Brief Anchor:** `/home/yonk/yonk-apps/pg-retest/skill-output/mission-brief/Mission-Brief-sql-parsing-upgrade.md` — re-read at every ⛔ drift checkpoint.
 
-**Success Criteria covered by this plan:** SC-006, SC-007, SC-008 (AST-backed sites portion — Phase 3 extends the harness), SC-011 (legacy-returning feature flag), SC-010 (Phase 2 ships as rc.5), SC-012.
+**Success Criteria covered by this plan:** SC-006, SC-007, SC-008 (AST-backed sites portion — Phase 3 extends the harness), SC-011 (legacy-returning feature flag — removed in the release after rc.4), SC-010 (revised — Phase 1 + 2 combined in rc.4), SC-012.
 
 **Drift Checkpoints injected:** DC-003 (after pg_query dep added, before rewriting) and DC-004 (end of Phase 2, Docker demo E2E + hot-path bench).
 
-**Prerequisite:** Phase 1 is merged into `main` and `dev/1.0.0-rc.5` branch is cut from `main` with `Cargo.toml` version bumped to `1.0.0-rc.5`.
+**Prerequisite:** Phase 1 complete on `dev/1.0.0-rc.4` (already done as of this plan). Phase 2 execution continues on the same `dev/1.0.0-rc.4` branch — mission brief SC-010 was revised 2026-04-18 to ship Phase 1 + 2 together as rc.4. No rc.5 cut; no version bump. Phase 3 gets a separate branch + release later.
 
 ---
 
