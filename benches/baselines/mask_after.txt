@@ -1,0 +1,44 @@
+   Compiling pg-retest v1.0.0-rc.4 (/home/yonk/yonk-apps/pg-retest)
+    Finished `bench` profile [optimized] target(s) in 16.71s
+     Running benches/mask_bench.rs (target/release/deps/mask_bench-1faebe410e97af53)
+Gnuplot not found, using plotters backend
+Benchmarking mask_simple
+Benchmarking mask_simple: Warming up for 3.0000 s
+Benchmarking mask_simple: Collecting 100 samples in estimated 5.0007 s (29M iterations)
+Benchmarking mask_simple: Analyzing
+mask_simple             time:   [172.69 ns 173.26 ns 173.80 ns]
+                        change: [+59.460% +59.878% +60.268%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking mask_many_literals
+Benchmarking mask_many_literals: Warming up for 3.0000 s
+Benchmarking mask_many_literals: Collecting 100 samples in estimated 5.0016 s (9.0M iterations)
+Benchmarking mask_many_literals: Analyzing
+mask_many_literals      time:   [552.86 ns 553.40 ns 554.00 ns]
+                        change: [+90.256% +90.525% +90.782%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking mask_no_literals
+Benchmarking mask_no_literals: Warming up for 3.0000 s
+Benchmarking mask_no_literals: Collecting 100 samples in estimated 5.0001 s (11M iterations)
+Benchmarking mask_no_literals: Analyzing
+mask_no_literals        time:   [430.86 ns 432.09 ns 433.42 ns]
+                        change: [+80.292% +80.880% +81.429%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 9 outliers among 100 measurements (9.00%)
+  8 (8.00%) low mild
+  1 (1.00%) high mild
+
+Benchmarking mask_dollar_quoted
+Benchmarking mask_dollar_quoted: Warming up for 3.0000 s
+Benchmarking mask_dollar_quoted: Collecting 100 samples in estimated 5.0000 s (61M iterations)
+Benchmarking mask_dollar_quoted: Analyzing
+mask_dollar_quoted      time:   [80.732 ns 80.824 ns 80.931 ns]
+                        change: [-42.645% -42.564% -42.481%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+
