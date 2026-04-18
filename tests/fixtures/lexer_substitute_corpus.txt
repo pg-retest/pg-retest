@@ -1,0 +1,35 @@
+# lexer_substitute_corpus.txt — gold snapshot for substitute_ids.
+# Each non-blank, non-# line is one SQL statement. The test applies
+# a fixed id_map: {"42": "1042", "7": "1007", "99": "1099", "alice": "alice_new"}
+# Expected output format per line: <count>|<output-sql>
+# Regenerate via: REGEN_SNAPSHOTS=1 cargo test --test sql_lexer_substitute_snapshot
+SELECT * FROM t WHERE id = 42
+SELECT * FROM t WHERE id = 42 AND x = 99
+SELECT * FROM t WHERE id = 42 LIMIT 42
+SELECT * FROM t WHERE id = 42 OFFSET 42
+SELECT * FROM t FETCH FIRST 42 ROWS ONLY
+SELECT 42 FROM t AS 42
+UPDATE t SET col = 42 WHERE id = 7
+DELETE FROM t WHERE id IN (42, 7, 99)
+SELECT * FROM t WHERE name = 'alice'
+INSERT INTO t (id, name) VALUES (42, 'alice')
+SELECT table42 FROM t WHERE id = 42
+SELECT * FROM t -- WHERE id = 42 (commented out)
+SELECT * FROM t /* WHERE id = 42 */ WHERE y = 99
+SELECT '42' FROM t WHERE id = 42
+SELECT $$string with 42$$ FROM t WHERE id = 42
+SELECT * FROM t WHERE id BETWEEN 7 AND 42
+WITH cte AS (SELECT id FROM t WHERE id = 42) SELECT * FROM cte WHERE id = 99
+SELECT * FROM t WHERE id = 42 ORDER BY id LIMIT 7 OFFSET 99
+SELECT * FROM orders WHERE cust_id = 42 AND status = 'alice'
+UPDATE orders SET price = 42.99 WHERE id = 7
+DELETE FROM t WHERE "column 42" = 42
+SELECT * FROM t WHERE id = -42
+SELECT * FROM t WHERE a = 42 AND b > 7
+SELECT * FROM t WHERE x = 42; SELECT 99
+SELECT * FROM t WHERE id = 42 FOR UPDATE
+SELECT * FROM t WHERE id = 42 FOR SHARE SKIP LOCKED
+INSERT INTO t (id) VALUES (42) ON CONFLICT (id) DO UPDATE SET id = 99
+SELECT * FROM t JOIN u ON t.id = u.id WHERE t.x = 42
+SELECT 42 AS id FROM t
+SELECT * FROM t HAVING COUNT(*) > 42

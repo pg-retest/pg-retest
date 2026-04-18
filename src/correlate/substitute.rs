@@ -15,342 +15,133 @@ enum Eligibility {
     IdentifierContext,
 }
 
-/// Parser state for SQL character-level scanning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-    Normal,
-    InStringLiteral,
-    InIdentifier,
-    InLineComment,
-    InBlockComment,
-    InNumericLiteral,
-}
-
 /// Substitute captured IDs in SQL with their replayed counterparts.
 ///
-/// Walks the SQL character by character, tracking parser state and keyword context
-/// to determine which literals are eligible for substitution. Returns the
-/// (possibly modified) SQL and the count of substitutions made.
+/// Uses `crate::sql::visit_tokens` (zero-alloc callback API) for hot-path
+/// performance. The `Eligibility` state machine tracks SQL keyword context
+/// (WHERE/AND/OR → eligible; LIMIT/OFFSET/FETCH → ineligible;
+/// AS/FROM/JOIN → identifier context) to decide which literals are eligible
+/// for substitution. Returns the (possibly modified) SQL and the count of
+/// substitutions made.
 pub fn substitute_ids<'a>(sql: &'a str, map: &DashMap<String, String>) -> (Cow<'a, str>, usize) {
+    use crate::sql::{visit_tokens, TokenKind};
+
     if map.is_empty() {
         return (Cow::Borrowed(sql), 0);
     }
 
-    let chars: Vec<char> = sql.chars().collect();
-    let len = chars.len();
-    let mut result = String::with_capacity(len);
+    let mut out = String::with_capacity(sql.len());
     let mut count = 0usize;
-    let mut i = 0;
-    let mut state = State::Normal;
     let mut eligibility = Eligibility::Neutral;
-    let mut string_buf = String::new();
 
-    while i < len {
-        match state {
-            State::Normal => {
-                let ch = chars[i];
-
-                // Line comment: --
-                if ch == '-' && i + 1 < len && chars[i + 1] == '-' {
-                    result.push('-');
-                    result.push('-');
-                    i += 2;
-                    state = State::InLineComment;
-                    continue;
-                }
-
-                // Block comment: /*
-                if ch == '/' && i + 1 < len && chars[i + 1] == '*' {
-                    result.push('/');
-                    result.push('*');
-                    i += 2;
-                    state = State::InBlockComment;
-                    continue;
-                }
-
-                // Dollar-quoted string: $$ or $tag$
-                if ch == '$' {
-                    // Collect tag chars after the opening $
-                    let tag_start = i;
-                    let mut tag_end = i + 1;
-                    while tag_end < len
-                        && (chars[tag_end].is_ascii_alphanumeric() || chars[tag_end] == '_')
-                    {
-                        tag_end += 1;
-                    }
-                    if tag_end < len && chars[tag_end] == '$' {
-                        // Found opening $tag$ (or $$) — collect the tag string
-                        let tag: String = chars[tag_start..=tag_end].iter().collect();
-                        result.push_str(&tag);
-                        i = tag_end + 1;
-                        // Find closing $tag$
-                        let rest: String = chars[i..].iter().collect();
-                        if let Some(close_pos) = rest.find(&tag) {
-                            result.push_str(&rest[..close_pos]);
-                            result.push_str(&tag);
-                            i += close_pos + tag.len();
-                        } else {
-                            // No closing tag — emit rest of SQL as-is
-                            result.push_str(&rest);
-                            i = len;
-                        }
-                        continue;
-                    }
-                    // Not a dollar quote — emit the $ and continue
-                    result.push('$');
-                    i += 1;
-                    continue;
-                }
-
-                // Double-quoted identifier
-                if ch == '"' {
-                    result.push(ch);
-                    i += 1;
-                    state = State::InIdentifier;
-                    continue;
-                }
-
-                // Single-quoted string literal
-                if ch == '\'' {
-                    string_buf.clear();
-                    i += 1;
-                    state = State::InStringLiteral;
-                    continue;
-                }
-
-                // Numeric literal (digit not preceded by alphanumeric or underscore)
-                if ch.is_ascii_digit() && !is_part_of_identifier(&result) {
-                    state = State::InNumericLiteral;
-                    // Don't advance i; we'll handle it in InNumericLiteral
-                    continue;
-                }
-
-                // Operators that set eligibility
-                if ch == '=' {
-                    result.push(ch);
-                    i += 1;
-                    eligibility = Eligibility::Eligible;
-                    continue;
-                }
-                if ch == '<' {
-                    result.push(ch);
-                    i += 1;
-                    if i < len && (chars[i] == '>' || chars[i] == '=') {
-                        result.push(chars[i]);
-                        i += 1;
-                    }
-                    eligibility = Eligibility::Eligible;
-                    continue;
-                }
-                if ch == '>' {
-                    result.push(ch);
-                    i += 1;
-                    if i < len && chars[i] == '=' {
-                        result.push(chars[i]);
-                        i += 1;
-                    }
-                    eligibility = Eligibility::Eligible;
-                    continue;
-                }
-                if ch == '!' && i + 1 < len && chars[i + 1] == '=' {
-                    result.push('!');
-                    result.push('=');
-                    i += 2;
-                    eligibility = Eligibility::Eligible;
-                    continue;
-                }
-
-                // Alphabetic: could be a keyword (Unicode-aware for international identifiers)
-                if ch.is_alphabetic() || ch == '_' {
-                    let word_start = i;
-                    while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                        result.push(chars[i]);
-                        i += 1;
-                    }
-                    let word = &sql[word_start..word_start + (i - word_start)];
-                    let upper = word.to_ascii_uppercase();
-
-                    match upper.as_str() {
-                        "WHERE" | "AND" | "OR" | "ON" | "IN" | "VALUES" | "SET" | "BETWEEN"
-                        | "HAVING" => {
-                            eligibility = Eligibility::Eligible;
-                        }
-                        "LIMIT" | "OFFSET" | "FETCH" => {
-                            eligibility = Eligibility::Ineligible;
-                        }
-                        "AS" | "FROM" | "JOIN" | "INTO" | "TABLE" | "INDEX" => {
-                            eligibility = Eligibility::IdentifierContext;
-                        }
-                        _ => {
-                            // If we're in identifier context, this word consumed it
-                            if eligibility == Eligibility::IdentifierContext {
-                                eligibility = Eligibility::Neutral;
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // Parentheses and commas do NOT change eligibility
-                // Everything else: pass through
-                result.push(ch);
-                i += 1;
-            }
-
-            State::InStringLiteral => {
-                if chars[i] == '\'' {
-                    if i + 1 < len && chars[i + 1] == '\'' {
-                        // Escaped quote
-                        string_buf.push('\'');
-                        string_buf.push('\'');
-                        i += 2;
+    visit_tokens(sql, |kind, text| {
+        match kind {
+            // String literals: substitute inner content if eligible.
+            TokenKind::StringLiteral => {
+                let inner = strip_single_quotes(text);
+                let should_sub =
+                    matches!(eligibility, Eligibility::Neutral | Eligibility::Eligible);
+                if should_sub {
+                    if let Some(replacement) = map.get(inner) {
+                        out.push('\'');
+                        out.push_str(replacement.value());
+                        out.push('\'');
+                        count += 1;
                     } else {
-                        // End of string literal
-                        i += 1;
-                        let should_substitute =
-                            matches!(eligibility, Eligibility::Neutral | Eligibility::Eligible);
-
-                        if should_substitute {
-                            if let Some(replacement) = map.get(&string_buf) {
-                                result.push('\'');
-                                result.push_str(replacement.value());
-                                result.push('\'');
-                                count += 1;
-                            } else {
-                                result.push('\'');
-                                result.push_str(&string_buf);
-                                result.push('\'');
-                            }
+                        out.push_str(text);
+                    }
+                } else {
+                    out.push_str(text);
+                }
+                if eligibility != Eligibility::Neutral {
+                    eligibility = Eligibility::Neutral;
+                }
+            }
+            // Numeric literals: substitute whole-token text if eligible AND
+            // the replacement is a safe-numeric-shaped string.
+            TokenKind::Number => {
+                let should_sub =
+                    matches!(eligibility, Eligibility::Neutral | Eligibility::Eligible);
+                if should_sub {
+                    if let Some(replacement) = map.get(text) {
+                        let safe = replacement.value().chars().all(|c| {
+                            c.is_ascii_digit() || matches!(c, '.' | '-' | 'e' | 'E' | '+')
+                        });
+                        if safe {
+                            out.push_str(replacement.value());
+                            count += 1;
                         } else {
-                            result.push('\'');
-                            result.push_str(&string_buf);
-                            result.push('\'');
+                            out.push_str(text);
                         }
-
-                        // Reset eligibility after consuming a literal
-                        if eligibility != Eligibility::Neutral {
+                    } else {
+                        out.push_str(text);
+                    }
+                } else {
+                    out.push_str(text);
+                }
+                if eligibility != Eligibility::Neutral {
+                    eligibility = Eligibility::Neutral;
+                }
+            }
+            TokenKind::Ident => {
+                let upper_buf = text.to_ascii_uppercase();
+                match upper_buf.as_str() {
+                    "WHERE" | "AND" | "OR" | "ON" | "IN" | "VALUES" | "SET" | "BETWEEN"
+                    | "HAVING" => {
+                        eligibility = Eligibility::Eligible;
+                    }
+                    "LIMIT" | "OFFSET" | "FETCH" => {
+                        eligibility = Eligibility::Ineligible;
+                    }
+                    "AS" | "FROM" | "JOIN" | "INTO" | "TABLE" | "INDEX" => {
+                        eligibility = Eligibility::IdentifierContext;
+                    }
+                    _ => {
+                        if eligibility == Eligibility::IdentifierContext {
                             eligibility = Eligibility::Neutral;
                         }
-                        state = State::Normal;
-                    }
-                } else {
-                    string_buf.push(chars[i]);
-                    i += 1;
-                }
-            }
-
-            State::InIdentifier => {
-                result.push(chars[i]);
-                if chars[i] == '"' {
-                    i += 1;
-                    state = State::Normal;
-                    // Identifier context consumed
-                    if eligibility == Eligibility::IdentifierContext {
-                        eligibility = Eligibility::Neutral;
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-
-            State::InLineComment => {
-                result.push(chars[i]);
-                if chars[i] == '\n' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-
-            State::InBlockComment => {
-                result.push(chars[i]);
-                if chars[i] == '*' && i + 1 < len && chars[i + 1] == '/' {
-                    result.push('/');
-                    i += 2;
-                    state = State::Normal;
-                } else {
-                    i += 1;
-                }
-            }
-
-            State::InNumericLiteral => {
-                // Accumulate the full numeric literal
-                let num_start = i;
-                while i < len && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-                // Check if followed by alphanumeric or underscore (part of identifier)
-                // or if it contains a dot (decimal - not an ID)
-                let is_standalone = if i < len {
-                    !(chars[i].is_ascii_alphabetic() || chars[i] == '_' || chars[i] == '.')
-                } else {
-                    true
-                };
-
-                if is_standalone {
-                    let num_str: String = chars[num_start..i].iter().collect();
-                    let should_substitute =
-                        matches!(eligibility, Eligibility::Neutral | Eligibility::Eligible);
-
-                    if should_substitute {
-                        if let Some(replacement) = map.get(&num_str) {
-                            // Only substitute if the replacement looks like a valid numeric value
-                            let is_safe = replacement.value().chars().all(|c| {
-                                c.is_ascii_digit()
-                                    || c == '.'
-                                    || c == '-'
-                                    || c == 'e'
-                                    || c == 'E'
-                                    || c == '+'
-                            });
-                            if is_safe {
-                                result.push_str(replacement.value());
-                                count += 1;
-                            } else {
-                                // Unsafe replacement value — skip substitution, emit original
-                                result.push_str(&num_str);
-                            }
-                        } else {
-                            result.push_str(&num_str);
-                        }
-                    } else {
-                        result.push_str(&num_str);
-                    }
-
-                    // Reset eligibility after consuming a literal
-                    if eligibility != Eligibility::Neutral {
-                        eligibility = Eligibility::Neutral;
-                    }
-                } else {
-                    // Part of identifier or decimal: push as-is and continue
-                    result.extend(chars[num_start..i].iter());
-                    // Continue consuming identifier chars
-                    while i < len
-                        && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '.')
-                    {
-                        result.push(chars[i]);
-                        i += 1;
                     }
                 }
-
-                state = State::Normal;
+                out.push_str(text);
             }
+            TokenKind::QuotedIdent => {
+                if eligibility == Eligibility::IdentifierContext {
+                    eligibility = Eligibility::Neutral;
+                }
+                out.push_str(text);
+            }
+            TokenKind::Punct => {
+                // Comparison-opening operators set Eligible. The lexer emits
+                // compound operators like `<=`, `>=`, `<>` as sequential
+                // single-char Puncts; setting Eligible on the first char is
+                // sufficient and matches prior behavior.
+                match text {
+                    "=" | "<" | ">" => eligibility = Eligibility::Eligible,
+                    _ => {}
+                }
+                out.push_str(text);
+            }
+            // Whitespace, comments, dollar-strings, bind params pass through.
+            _ => out.push_str(text),
         }
-    }
+    });
 
     if count == 0 {
         (Cow::Borrowed(sql), 0)
     } else {
-        (Cow::Owned(result), count)
+        (Cow::Owned(out), count)
     }
 }
 
-/// Check if the last character in result is part of an identifier (letter, digit, underscore).
-fn is_part_of_identifier(result: &str) -> bool {
-    result
-        .chars()
-        .last()
-        .map(|c| c.is_ascii_alphanumeric() || c == '_')
-        .unwrap_or(false)
+/// Strip the leading and trailing single quote from a StringLiteral token text.
+fn strip_single_quotes(tok_text: &str) -> &str {
+    let bytes = tok_text.as_bytes();
+    if bytes.len() >= 2 && bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'' {
+        &tok_text[1..tok_text.len() - 1]
+    } else {
+        // Unterminated string — strip only the leading quote.
+        &tok_text[1..]
+    }
 }
 
 #[cfg(test)]
