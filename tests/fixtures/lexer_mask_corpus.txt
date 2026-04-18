@@ -1,0 +1,35 @@
+# lexer_mask_corpus.txt — gold-snapshot corpus for mask_sql_literals.
+# 31 non-blank, non-# lines (one is a SQL line comment — the test filter
+# preserves SQL line comments, only strips `#` file comments).
+# Regenerate expected.txt by running: REGEN_SNAPSHOTS=1 cargo test --test sql_lexer_mask_snapshot
+SELECT 1
+SELECT * FROM users WHERE id = 42
+SELECT * FROM users WHERE name = 'Alice'
+INSERT INTO t (s) VALUES ('it''s a test')
+UPDATE orders SET price = 19.99 WHERE id = 7
+DELETE FROM users WHERE email = 'x@y.z'
+SELECT col1, col2 FROM table3
+SELECT "column1" FROM "table2" WHERE id = 5
+SELECT $$hello 'world'$$ FROM dual
+SELECT $tag$body with 'quotes' and $$inside$$$tag$ FROM t
+SELECT -5, 3.14, 1.5e10, 2E-3 FROM n
+SELECT * FROM t WHERE x = -5
+SELECT * FROM t WHERE x - 5 > 0
+SELECT a + b, c * d FROM t
+WITH cte AS (SELECT id FROM orders WHERE total > 100) SELECT * FROM cte
+SELECT id, SUM(amount) OVER (PARTITION BY user_id ORDER BY ts) FROM payments
+SELECT DISTINCT ON (user_id) user_id, id FROM events ORDER BY user_id, ts DESC
+INSERT INTO t (a, b) VALUES ('hello', 42), ('world', 99)
+SELECT count(*) FROM users WHERE created_at >= '2026-01-01'::date
+SELECT data->>'email' FROM users WHERE data @> '{"active":true}'
+SELECT * FROM t WHERE x IN (1, 2, 3) AND y NOT IN ('a', 'b')
+SELECT * FROM t WHERE x BETWEEN 10 AND 20
+-- top-level comment before SELECT
+SELECT /* inline block */ 1 /* trailing */
+SELECT 'line with -- fake comment inside string'
+SELECT 'block /* not a comment */ in string'
+INSERT INTO orders (id, note) VALUES (1, 'RETURNING id would be here if quoted')
+SELECT * FROM "schema with spaces"."table with ""quotes"""
+SELECT 'escaped '' quote' FROM t
+SELECT e'raw\nstring' FROM t
+UPDATE t SET col = NULL WHERE col IS NOT NULL

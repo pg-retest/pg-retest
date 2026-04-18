@@ -1,0 +1,31 @@
+SELECT $N
+SELECT * FROM users WHERE id = $N
+SELECT * FROM users WHERE name = $S
+INSERT INTO t (s) VALUES ($S)
+UPDATE orders SET price = $N WHERE id = $N
+DELETE FROM users WHERE email = $S
+SELECT col1, col2 FROM table3
+SELECT "column1" FROM "table2" WHERE id = $N
+SELECT $S FROM dual
+SELECT $S FROM t
+SELECT $N, $N, $N, $N FROM n
+SELECT * FROM t WHERE x = $N
+SELECT * FROM t WHERE x - $N > $N
+SELECT a + b, c * d FROM t
+WITH cte AS (SELECT id FROM orders WHERE total > $N) SELECT * FROM cte
+SELECT id, SUM(amount) OVER (PARTITION BY user_id ORDER BY ts) FROM payments
+SELECT DISTINCT ON (user_id) user_id, id FROM events ORDER BY user_id, ts DESC
+INSERT INTO t (a, b) VALUES ($S, $N), ($S, $N)
+SELECT count(*) FROM users WHERE created_at >= $S::date
+SELECT data->>$S FROM users WHERE data @> $S
+SELECT * FROM t WHERE x IN ($N, $N, $N) AND y NOT IN ($S, $S)
+SELECT * FROM t WHERE x BETWEEN $N AND $N
+-- top-level comment before SELECT
+SELECT /* inline block */ $N /* trailing */
+SELECT $S
+SELECT $S
+INSERT INTO orders (id, note) VALUES ($N, $S)
+SELECT * FROM "schema with spaces"."table with ""quotes"""
+SELECT $S FROM t
+SELECT e$S FROM t
+UPDATE t SET col = NULL WHERE col IS NOT NULL

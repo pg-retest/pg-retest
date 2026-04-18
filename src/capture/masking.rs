@@ -1,137 +1,22 @@
 /// Mask SQL literal values to prevent PII leakage.
 ///
 /// Replaces single-quoted strings with `$S` and numeric literals with `$N`.
-/// Handles escaped quotes (`''`), dollar-quoted strings (`$$...$$`),
-/// and does not mask numbers in identifiers.
+/// Handles escaped quotes (`''`), dollar-quoted strings (`$$...$$` and
+/// `$tag$...$tag$`), and does not mask digits inside identifiers.
+///
+/// Reuses `crate::sql::SqlLexer` for token boundary detection.
 pub fn mask_sql_literals(sql: &str) -> String {
-    let chars: Vec<char> = sql.chars().collect();
-    let len = chars.len();
-    let mut result = String::with_capacity(len);
-    let mut i = 0;
+    use crate::sql::{SqlLexer, TokenKind};
 
-    while i < len {
-        match chars[i] {
-            // Single-quoted string literal
-            '\'' => {
-                result.push_str("$S");
-                i += 1;
-                // Skip contents until closing quote
-                while i < len {
-                    if chars[i] == '\'' {
-                        if i + 1 < len && chars[i + 1] == '\'' {
-                            // Escaped quote (''), skip both
-                            i += 2;
-                        } else {
-                            // End of string literal
-                            i += 1;
-                            break;
-                        }
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            // Dollar-quoted string ($$...$$)
-            '$' if i + 1 < len && chars[i + 1] == '$' => {
-                result.push_str("$S");
-                i += 2;
-                // Skip until matching $$
-                while i + 1 < len {
-                    if chars[i] == '$' && chars[i + 1] == '$' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-                // Handle edge case: reached end without closing $$
-                if i >= len {
-                    // Already consumed everything
-                }
-            }
-            // Numeric literal (not inside an identifier)
-            c if c.is_ascii_digit()
-                || (c == '-' && is_numeric_context(&result, &chars, i, len)) =>
-            {
-                // Check this isn't part of an identifier (letter/underscore before it)
-                if c.is_ascii_digit() && is_part_of_identifier(&result) {
-                    result.push(c);
-                    i += 1;
-                } else {
-                    result.push_str("$N");
-                    // Skip the negative sign if present
-                    if c == '-' {
-                        i += 1;
-                    }
-                    // Skip digits
-                    while i < len && chars[i].is_ascii_digit() {
-                        i += 1;
-                    }
-                    // Skip decimal part
-                    if i < len && chars[i] == '.' && i + 1 < len && chars[i + 1].is_ascii_digit() {
-                        i += 1; // skip dot
-                        while i < len && chars[i].is_ascii_digit() {
-                            i += 1;
-                        }
-                    }
-                    // Skip scientific notation
-                    if i < len && (chars[i] == 'e' || chars[i] == 'E') {
-                        i += 1;
-                        if i < len && (chars[i] == '+' || chars[i] == '-') {
-                            i += 1;
-                        }
-                        while i < len && chars[i].is_ascii_digit() {
-                            i += 1;
-                        }
-                    }
-                }
-            }
-            // Double-quoted identifier — pass through unchanged
-            '"' => {
-                result.push(chars[i]);
-                i += 1;
-                while i < len {
-                    result.push(chars[i]);
-                    if chars[i] == '"' {
-                        i += 1;
-                        break;
-                    }
-                    i += 1;
-                }
-            }
-            // Everything else: pass through
-            c => {
-                result.push(c);
-                i += 1;
-            }
+    let mut out = String::with_capacity(sql.len());
+    for tok in SqlLexer::new(sql) {
+        match tok.kind {
+            TokenKind::StringLiteral | TokenKind::DollarString => out.push_str("$S"),
+            TokenKind::Number => out.push_str("$N"),
+            _ => out.push_str(tok.text),
         }
     }
-
-    result
-}
-
-/// Check if the last character in result is part of an identifier (letter, digit, underscore).
-fn is_part_of_identifier(result: &str) -> bool {
-    result
-        .chars()
-        .last()
-        .map(|c| c.is_ascii_alphanumeric() || c == '_')
-        .unwrap_or(false)
-}
-
-/// Check if a '-' at position i looks like a negative number sign rather than subtraction.
-fn is_numeric_context(result: &str, chars: &[char], i: usize, len: usize) -> bool {
-    // '-' is a negative sign if:
-    // 1. The next char is a digit
-    // 2. The previous non-whitespace token is an operator or keyword context
-    if i + 1 >= len || !chars[i + 1].is_ascii_digit() {
-        return false;
-    }
-    // Look at the last non-whitespace char in result
-    let last = result.trim_end().chars().last();
-    matches!(
-        last,
-        Some('(' | ',' | '=' | '<' | '>' | '+' | '-' | '*' | '/' | '|') | None
-    )
+    out
 }
 
 #[cfg(test)]
