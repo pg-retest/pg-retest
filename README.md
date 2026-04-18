@@ -899,6 +899,23 @@ v2 profiles include transaction IDs on queries. v1 profiles (without transaction
 
 ## Building & Testing
 
+### System prerequisites
+
+pg-retest depends on [`pg_query`](https://crates.io/crates/pg_query), which
+links libpg_query (PostgreSQL's C parser) and uses `bindgen` to generate its
+Rust bindings. `bindgen` needs a working clang toolchain with its libclang
+headers. On a fresh Ubuntu/Debian system:
+
+```bash
+sudo apt-get install -y libclang-dev build-essential
+```
+
+On macOS, `xcode-select --install` is sufficient. Rust 2021 edition or later
+is required (`rustup update stable`). CI installs `libclang-dev` automatically
+(see `.github/workflows/ci.yml`).
+
+### Commands
+
 ```bash
 # Debug build
 cargo build

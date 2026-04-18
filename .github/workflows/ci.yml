@@ -16,6 +16,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install C/bindgen build deps for pg_query
+        # pg_query's build.rs uses bindgen which needs clang + the matching
+        # libclang headers. ubuntu-latest has clang but not libclang-common-*
+        # by default, which causes bindgen to fail finding stddef.h.
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - name: Build
         run: cargo build --release
       - name: Run tests
