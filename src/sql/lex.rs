@@ -49,10 +49,12 @@ impl<'a> SqlLexer<'a> {
     }
 }
 
-impl<'a> Iterator for SqlLexer<'a> {
-    type Item = Token<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl<'a> SqlLexer<'a> {
+    /// Scan one token and advance internal state. Returns (kind, start, end)
+    /// of the token text, or None at EOF. Separated from `Iterator::next` so
+    /// `visit_tokens` can avoid the Token struct allocation in hot paths.
+    #[inline]
+    fn advance(&mut self) -> Option<(TokenKind, usize, usize)> {
         let rest = self.src.get(self.pos..)?;
         if rest.is_empty() {
             return None;
@@ -66,7 +68,7 @@ impl<'a> Iterator for SqlLexer<'a> {
                 .find('\n')
                 .map(|off| start + off)
                 .unwrap_or(start + rest.len());
-            return Some(self.emit(TokenKind::LineComment, start, end));
+            return Some(self.advance_emit(TokenKind::LineComment, start, end));
         }
 
         // Block comment: /* ... */ (non-nesting, matches current masking behavior)
@@ -75,12 +77,12 @@ impl<'a> Iterator for SqlLexer<'a> {
             let mut i = 2;
             while i + 1 < bytes.len() {
                 if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                    return Some(self.emit(TokenKind::BlockComment, start, start + i + 2));
+                    return Some(self.advance_emit(TokenKind::BlockComment, start, start + i + 2));
                 }
                 i += 1;
             }
             // Unterminated — consume to EOF.
-            return Some(self.emit(TokenKind::BlockComment, start, start + rest.len()));
+            return Some(self.advance_emit(TokenKind::BlockComment, start, start + rest.len()));
         }
 
         // Whitespace run
@@ -105,39 +107,39 @@ impl<'a> Iterator for SqlLexer<'a> {
                     break;
                 }
             }
-            return Some(self.emit(TokenKind::Whitespace, start, start + i));
+            return Some(self.advance_emit(TokenKind::Whitespace, start, start + i));
         }
 
         // Single-quoted string literal (with '' escape)
         if first == '\'' {
             let end = scan_single_quoted(rest, start);
-            return Some(self.emit(TokenKind::StringLiteral, start, end));
+            return Some(self.advance_emit(TokenKind::StringLiteral, start, end));
         }
 
         // Dollar-quoted string: $$ or $tag$
         if first == '$' {
             if let Some(end) = scan_dollar_quoted(rest, start) {
-                return Some(self.emit(TokenKind::DollarString, start, end));
+                return Some(self.advance_emit(TokenKind::DollarString, start, end));
             }
             // Bind param? $1, $42 ...
             if let Some(end) = scan_bind_param(rest, start) {
-                return Some(self.emit(TokenKind::BindParam, start, end));
+                return Some(self.advance_emit(TokenKind::BindParam, start, end));
             }
             // Bare $ — treat as Punct.
-            return Some(self.emit(TokenKind::Punct, start, start + 1));
+            return Some(self.advance_emit(TokenKind::Punct, start, start + 1));
         }
 
         // Double-quoted identifier (with "" escape)
         if first == '"' {
             let end = scan_quoted_ident(rest, start);
-            return Some(self.emit(TokenKind::QuotedIdent, start, end));
+            return Some(self.advance_emit(TokenKind::QuotedIdent, start, end));
         }
 
         // Numeric literal: optional leading '-' in numeric context, digits, optional
         // decimal part, optional scientific-notation suffix.
         if first.is_ascii_digit() || (first == '-' && self.is_numeric_context(rest)) {
             let end = scan_number(rest, start);
-            return Some(self.emit(TokenKind::Number, start, end));
+            return Some(self.advance_emit(TokenKind::Number, start, end));
         }
 
         // Identifier
@@ -162,17 +164,23 @@ impl<'a> Iterator for SqlLexer<'a> {
                     break;
                 }
             }
-            return Some(self.emit(TokenKind::Ident, start, start + i));
+            return Some(self.advance_emit(TokenKind::Ident, start, start + i));
         }
 
         // Single-char punctuation fallback.
         let end = start + first.len_utf8();
-        Some(self.emit(TokenKind::Punct, start, end))
+        Some(self.advance_emit(TokenKind::Punct, start, end))
     }
-}
 
-impl<'a> SqlLexer<'a> {
-    fn emit(&mut self, kind: TokenKind, start: usize, end: usize) -> Token<'a> {
+    /// Update `pos` and `last_punct` per the token-kind rule (Whitespace
+    /// transparent; Punct sets; anything else clears), then return the tuple.
+    #[inline]
+    fn advance_emit(
+        &mut self,
+        kind: TokenKind,
+        start: usize,
+        end: usize,
+    ) -> (TokenKind, usize, usize) {
         let text = &self.src[start..end];
         self.pos = end;
         // Track the most recent Punct text so the Number branch can decide
@@ -183,11 +191,7 @@ impl<'a> SqlLexer<'a> {
             TokenKind::Punct => self.last_punct = Some(text),
             _ => self.last_punct = None,
         }
-        Token {
-            kind,
-            text,
-            span: start..end,
-        }
+        (kind, start, end)
     }
 
     /// Decide whether a `-` at `rest[0]` is a negative sign (part of a number)
@@ -204,6 +208,33 @@ impl<'a> SqlLexer<'a> {
             None => true,
             Some(p) => matches!(p, "(" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|"),
         }
+    }
+}
+
+impl<'a> Iterator for SqlLexer<'a> {
+    type Item = Token<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (kind, start, end) = self.advance()?;
+        Some(Token {
+            kind,
+            text: &self.src[start..end],
+            span: start..end,
+        })
+    }
+}
+
+/// Zero-alloc token visitor. Invokes `f(kind, text)` for each token in `sql`
+/// without constructing `Token` values. Identical token boundaries to
+/// iterating `SqlLexer::new(sql)`.
+///
+/// Use this in hot paths that only need `kind` + `text` (not `span`). Callers
+/// that need positioned spans should use `SqlLexer::new(sql)` as an iterator.
+#[inline]
+pub fn visit_tokens<'a, F: FnMut(TokenKind, &'a str)>(sql: &'a str, mut f: F) {
+    let mut lexer = SqlLexer::new(sql);
+    while let Some((kind, start, end)) = lexer.advance() {
+        f(kind, &sql[start..end]);
     }
 }
 

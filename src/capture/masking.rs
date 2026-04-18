@@ -4,18 +4,18 @@
 /// Handles escaped quotes (`''`), dollar-quoted strings (`$$...$$` and
 /// `$tag$...$tag$`), and does not mask digits inside identifiers.
 ///
-/// Reuses `crate::sql::SqlLexer` for token boundary detection.
+/// Uses `crate::sql::visit_tokens` (zero-alloc callback API) for hot-path
+/// performance — avoids the per-token `Token` struct allocation the iterator
+/// form incurs.
 pub fn mask_sql_literals(sql: &str) -> String {
-    use crate::sql::{SqlLexer, TokenKind};
+    use crate::sql::{visit_tokens, TokenKind};
 
     let mut out = String::with_capacity(sql.len());
-    for tok in SqlLexer::new(sql) {
-        match tok.kind {
-            TokenKind::StringLiteral | TokenKind::DollarString => out.push_str("$S"),
-            TokenKind::Number => out.push_str("$N"),
-            _ => out.push_str(tok.text),
-        }
-    }
+    visit_tokens(sql, |kind, text| match kind {
+        TokenKind::StringLiteral | TokenKind::DollarString => out.push_str("$S"),
+        TokenKind::Number => out.push_str("$N"),
+        _ => out.push_str(text),
+    });
     out
 }
 

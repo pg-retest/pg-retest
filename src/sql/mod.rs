@@ -1,2 +1,2 @@
 pub mod lex;
-pub use lex::{Span, SqlLexer, Token, TokenKind};
+pub use lex::{visit_tokens, Span, SqlLexer, Token, TokenKind};
