@@ -119,6 +119,13 @@ impl<'a> Iterator for SqlLexer<'a> {
             return Some(self.emit(TokenKind::QuotedIdent, start, end));
         }
 
+        // Numeric literal: optional leading '-' in numeric context, digits, optional
+        // decimal part, optional scientific-notation suffix.
+        if first.is_ascii_digit() || (first == '-' && self.is_numeric_context(rest)) {
+            let end = scan_number(rest, start);
+            return Some(self.emit(TokenKind::Number, start, end));
+        }
+
         // Identifier
         if first.is_alphabetic() || first == '_' {
             let end = rest
@@ -152,6 +159,22 @@ impl<'a> SqlLexer<'a> {
             kind,
             text,
             span: start..end,
+        }
+    }
+
+    /// Decide whether a `-` at `rest[0]` is a negative sign (part of a number)
+    /// or a subtraction operator. True iff the next char is a digit AND the
+    /// previous significant (non-whitespace) token was an operator-like
+    /// single-char Punct (matches the char list from the pre-migration impl),
+    /// or there was no prior significant token.
+    fn is_numeric_context(&self, rest: &str) -> bool {
+        let bytes = rest.as_bytes();
+        if bytes.len() < 2 || !bytes[1].is_ascii_digit() {
+            return false;
+        }
+        match self.last_punct {
+            None => true,
+            Some(p) => matches!(p, "(" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|"),
         }
     }
 }
@@ -215,6 +238,40 @@ fn scan_bind_param(rest: &str, start: usize) -> Option<usize> {
         i += 1;
     }
     Some(start + i)
+}
+
+/// Scan a numeric literal: `-?<digits>(.<digits>)?([eE][-+]?<digits>)?`.
+/// Returns absolute end byte offset.
+fn scan_number(rest: &str, start: usize) -> usize {
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    if bytes[0] == b'-' {
+        i = 1;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    // Decimal part
+    if i < bytes.len() && bytes[i] == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    // Scientific notation
+    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        let mut j = i + 1;
+        if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+            j += 1;
+        }
+        if j < bytes.len() && bytes[j].is_ascii_digit() {
+            i = j;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+    }
+    start + i
 }
 
 /// Scan a double-quoted identifier starting at `rest[0]='"'`. Handles `""` escape.
@@ -376,5 +433,53 @@ mod tests {
     fn lex_minus_not_comment() {
         // A single `-` should be Punct, not LineComment.
         assert_eq!(kinds("-x"), vec![TokenKind::Punct, TokenKind::Ident]);
+    }
+
+    #[test]
+    fn lex_integer() {
+        assert_eq!(kinds("42"), vec![TokenKind::Number]);
+    }
+
+    #[test]
+    fn lex_decimal() {
+        assert_eq!(kinds("3.14"), vec![TokenKind::Number]);
+        assert_eq!(texts("3.14"), vec!["3.14"]);
+    }
+
+    #[test]
+    fn lex_scientific() {
+        assert_eq!(kinds("1.5e10"), vec![TokenKind::Number]);
+        assert_eq!(kinds("2E-3"), vec![TokenKind::Number]);
+    }
+
+    #[test]
+    fn lex_negative_in_numeric_context() {
+        // After `=`, a leading `-` is part of a negative number.
+        assert_eq!(
+            kinds("x=-5"),
+            vec![TokenKind::Ident, TokenKind::Punct, TokenKind::Number]
+        );
+        assert_eq!(texts("x=-5"), vec!["x", "=", "-5"]);
+    }
+
+    #[test]
+    fn lex_subtract_not_negative() {
+        // After an identifier (not an operator/punct), `-` is subtraction, not negative.
+        assert_eq!(
+            kinds("a - 5"),
+            vec![
+                TokenKind::Ident,
+                TokenKind::Whitespace,
+                TokenKind::Punct,
+                TokenKind::Whitespace,
+                TokenKind::Number,
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_digit_after_ident_part_of_ident() {
+        // `table3` is one Ident, not Ident+Number.
+        assert_eq!(kinds("table3"), vec![TokenKind::Ident]);
     }
 }
