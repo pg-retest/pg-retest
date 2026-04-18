@@ -60,6 +60,29 @@ impl<'a> Iterator for SqlLexer<'a> {
         let start = self.pos;
         let first = rest.chars().next()?;
 
+        // Line comment: -- to end of line (or EOF)
+        if rest.starts_with("--") {
+            let end = rest
+                .find('\n')
+                .map(|off| start + off)
+                .unwrap_or(start + rest.len());
+            return Some(self.emit(TokenKind::LineComment, start, end));
+        }
+
+        // Block comment: /* ... */ (non-nesting, matches current masking behavior)
+        if rest.starts_with("/*") {
+            let bytes = rest.as_bytes();
+            let mut i = 2;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                    return Some(self.emit(TokenKind::BlockComment, start, start + i + 2));
+                }
+                i += 1;
+            }
+            // Unterminated — consume to EOF.
+            return Some(self.emit(TokenKind::BlockComment, start, start + rest.len()));
+        }
+
         // Whitespace run
         if first.is_whitespace() {
             let end = rest
@@ -312,5 +335,46 @@ mod tests {
         let sql = "\"he said \"\"hi\"\"\"";
         assert_eq!(kinds(sql), vec![TokenKind::QuotedIdent]);
         assert_eq!(texts(sql), vec![sql]);
+    }
+
+    #[test]
+    fn lex_line_comment() {
+        assert_eq!(
+            kinds("-- hello\nSELECT"),
+            vec![
+                TokenKind::LineComment,
+                TokenKind::Whitespace,
+                TokenKind::Ident
+            ]
+        );
+        assert_eq!(texts("-- hello\nSELECT"), vec!["-- hello", "\n", "SELECT"]);
+    }
+
+    #[test]
+    fn lex_line_comment_eof() {
+        assert_eq!(kinds("-- end"), vec![TokenKind::LineComment]);
+    }
+
+    #[test]
+    fn lex_block_comment() {
+        assert_eq!(kinds("/* hi */"), vec![TokenKind::BlockComment]);
+        assert_eq!(texts("/* hi */"), vec!["/* hi */"]);
+    }
+
+    #[test]
+    fn lex_block_comment_unterminated() {
+        // Malformed — consume to EOF without panic.
+        assert_eq!(kinds("/* oops"), vec![TokenKind::BlockComment]);
+    }
+
+    #[test]
+    fn lex_block_comment_with_star_inside() {
+        assert_eq!(kinds("/* 2 * 3 */"), vec![TokenKind::BlockComment]);
+    }
+
+    #[test]
+    fn lex_minus_not_comment() {
+        // A single `-` should be Punct, not LineComment.
+        assert_eq!(kinds("-x"), vec![TokenKind::Punct, TokenKind::Ident]);
     }
 }
