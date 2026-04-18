@@ -230,6 +230,13 @@ impl<'a> Iterator for SqlLexer<'a> {
 ///
 /// Use this in hot paths that only need `kind` + `text` (not `span`). Callers
 /// that need positioned spans should use `SqlLexer::new(sql)` as an iterator.
+///
+/// # Stability
+///
+/// Internal-stable only. `pg-retest` is pre-1.0 and the signature may change
+/// as Phase 2 / Phase 3 of the SQL parsing upgrade lands (e.g., to pass richer
+/// context like enclosing-CTE or prior-keyword state). Do not rely on this
+/// function from outside the crate.
 #[inline]
 pub fn visit_tokens<'a, F: FnMut(TokenKind, &'a str)>(sql: &'a str, mut f: F) {
     let mut lexer = SqlLexer::new(sql);
@@ -497,6 +504,34 @@ mod tests {
     #[test]
     fn lex_integer() {
         assert_eq!(kinds("42"), vec![TokenKind::Number]);
+    }
+
+    #[test]
+    fn lex_bind_param_single() {
+        assert_eq!(kinds("$1"), vec![TokenKind::BindParam]);
+        assert_eq!(texts("$1"), vec!["$1"]);
+    }
+
+    #[test]
+    fn lex_bind_param_multi_digit() {
+        assert_eq!(kinds("$42"), vec![TokenKind::BindParam]);
+        assert_eq!(texts("$42"), vec!["$42"]);
+    }
+
+    #[test]
+    fn lex_bind_param_then_ident() {
+        // Ensure $1 is BindParam (not an unterminated DollarString) when
+        // followed by whitespace + ident.
+        assert_eq!(
+            kinds("$1 AS x"),
+            vec![
+                TokenKind::BindParam,
+                TokenKind::Whitespace,
+                TokenKind::Ident,
+                TokenKind::Whitespace,
+                TokenKind::Ident,
+            ]
+        );
     }
 
     #[test]

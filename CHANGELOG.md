@@ -7,7 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No unreleased changes.
+### Fixed
+
+- **PII leak in `mask_sql_literals` for tagged dollar-quoted strings.** The
+  pre-rc.4 hand-rolled scanner only recognized `$$...$$` and not the tagged
+  form `$tag$...$tag$`. For queries containing tagged dollar quotes, the inner
+  string was masked (`$S`) but the surrounding `$tag$...$tag$` delimiters were
+  left intact, exposing to log consumers that a quoted string existed and its
+  position in the query. The rc.4 `SqlLexer` recognizes both forms and masks
+  the whole token as `$S`. Applies to both proxy capture and CSV-log capture
+  paths. Documented in `tests/sql_lexer_mask_snapshot.rs` module doc.
+
+### Changed
+
+- **`mask_sql_literals` and `substitute_ids` rewritten on a shared `SqlLexer`.**
+  See `docs/plans/2026-04-17-sql-parsing-phase-1.md` and
+  `skill-output/mission-brief/Mission-Brief-sql-parsing-upgrade.md`. New module
+  `src/sql/` exposes `SqlLexer` (iterator) and `visit_tokens` (zero-alloc
+  callback). Eliminates ~300 lines of duplicated character-scanning logic
+  across `src/capture/masking.rs` and `src/correlate/substitute.rs`.
+- **Negative-number lexing after keyword context** (behavioral). Under the old
+  hand-rolled scanners, `WHERE id = -5` was lexed as separate `-` and `5`
+  tokens; masking produced `-$N` (instead of `$N`) and `substitute_ids` looked
+  up key `"5"` instead of `"-5"`. The new lexer treats `-5` as one `Number`
+  token after operator-like punctuation or start-of-input. Real-world impact
+  is nil for captured integer primary keys (positive), but consumers that diff
+  masked output against stored snapshots from rc.3 will see `-$N` → `$N` for
+  these queries. Documented in both snapshot tests' module doc comments.
+- **Two behavioral divergences gated by gold-snapshot tests.** Any future
+  change to mask/substitute output requires a deliberate
+  `REGEN_SNAPSHOTS=1 cargo test` step, making silent behavior drift
+  difficult.
+
+### Notes
+
+- The shared lexer adds ~100–200 ns/query overhead versus the pre-migration
+  monolithic state machine (worst case ~150 ns absolute). At 10k qps proxy
+  load that is ~0.15 % CPU per thread — below the noise floor of network and
+  database latency. Retained as the price of eliminating duplicated scanner
+  code and closing the tagged dollar-quote PII leak. See SC-005 (revised) in
+  the mission brief.
 
 ## [1.0.0-rc.3] — 2026-04-15
 
