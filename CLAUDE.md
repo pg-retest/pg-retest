@@ -109,6 +109,7 @@ Key modules:
 - `proxy::control` — Minimal HTTP control endpoint for standalone persistent proxy, exposes `/status` and `/metrics`
 - `proxy::metrics` — Prometheus-shaped `ProxyMetrics` struct with atomic counters for connections (total/active/rejected), queries, bytes in/out, errors, backend health, uptime, plus a `render(pool_active, pool_idle)` function returning text-exposition format
 - `proxy::health` — Credential-free backend health check task. Periodic TCP + PG SSLRequest probe; flips `backend_degraded` after N consecutive failures. Configured via `--health-check-interval`, `--health-check-timeout`, `--health-check-fail-threshold`
+- `sql::lex` — Shared SQL lexer (`SqlLexer` iterator + `visit_tokens` zero-alloc callback + `Token`/`TokenKind`/`Span` types). Byte-offset-based, iterator-pattern with ASCII fast paths for Whitespace/Ident. Consumed by `capture::masking` and `correlate::substitute`. Does NOT attempt structural parsing — token boundaries only (Whitespace, Ident, StringLiteral, DollarString, QuotedIdent, Number, BindParam, LineComment, BlockComment, Punct). See `docs/plans/2026-04-17-sql-parsing-phase-1.md` and `skill-output/mission-brief/Mission-Brief-sql-parsing-upgrade.md`.
 - `tls` — TLS connector builder (`TlsMode` enum: Disable/Prefer/Require), used by replay and tuner. `make_tls_connector()` with optional CA cert path.
 - `web::auth` — Bearer token auth middleware for Axum dashboard
 
@@ -202,6 +203,10 @@ Key modules:
 - Profile format additions are backward-compatible: `response_values: Option<Vec<ResponseRow>>` on Query, `sequence_snapshot: Option<Vec<SequenceState>>` and `pk_map: Option<Vec<TablePk>>` on Metadata.
 - `dashmap` crate used for lock-free concurrent ID map.
 - PK discovery uses `--source-db` connection string (not `--target` which is host:port format).
+- SQL lexer (`src/sql/lex.rs`) is shared by masking and ID substitution. When adding a new call site that needs SQL tokenization, consume `visit_tokens(sql, |kind, text| ...)` for hot paths (zero-alloc) or `SqlLexer::new(sql)` as an iterator when you need `Token { kind, text, span }`. The lexer handles: single-quoted strings with `''` escape, dollar-quoted strings (`$$` and `$tag$`), double-quoted identifiers with `""` escape, line/block comments (EOF-tolerant), numeric literals (int/decimal/scientific/negative-in-numeric-context), bind params (`$N`), Unicode identifiers.
+- Phase 1 parity is enforced by gold-snapshot tests in `tests/sql_lexer_mask_snapshot.rs` and `tests/sql_lexer_substitute_snapshot.rs`. Regenerate with `REGEN_SNAPSHOTS=1 cargo test --test <name>` only when intentionally changing mask/substitute behavior.
+- The SqlLexer-based `mask_sql_literals` and `substitute_ids` fix a pre-existing PII leak where tagged dollar quotes (`$tag$...$tag$`) were not recognized by the hand-rolled scanner, leaving `$tag$` delimiters visible around masked contents. Also fix negative-number lexing after keyword context (e.g., `WHERE id = -42` is now one Number token). Both changes are documented in the snapshot tests' module doc comments.
+- Shared-lexer abstraction tax: `mask_sql_literals` runs ~200ns/query slower than the pre-migration monolithic state machine on worst-case inputs. At 10k qps proxy load that's ~0.2% CPU — accepted as the price of eliminating ~300 lines of duplicated scanner code and closing the PII leak. If a future consumer needs the absolute fastest path, inline the lexer via a macro or hand-roll the specific scanner — don't regress `visit_tokens` for one caller.
 
 ## Conventions
 
