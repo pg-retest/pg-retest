@@ -1,0 +1,34 @@
+   Compiling pg_query v6.1.1
+   Compiling pg-retest v1.0.0-rc.4 (/home/yonk/yonk-apps/pg-retest)
+    Finished `bench` profile [optimized] target(s) in 23.11s
+     Running benches/returning_bench.rs (target/release/deps/returning_bench-806d13b783ee4bb9)
+Gnuplot not found, using plotters backend
+Benchmarking returning_select_skipped
+Benchmarking returning_select_skipped: Warming up for 3.0000 s
+Benchmarking returning_select_skipped: Collecting 100 samples in estimated 5.0000 s (361M iterations)
+Benchmarking returning_select_skipped: Analyzing
+returning_select_skipped
+                        time:   [13.203 ns 13.234 ns 13.265 ns]
+
+Benchmarking returning_insert_no_returning
+Benchmarking returning_insert_no_returning: Warming up for 3.0000 s
+Benchmarking returning_insert_no_returning: Collecting 100 samples in estimated 5.0000 s (347M iterations)
+Benchmarking returning_insert_no_returning: Analyzing
+returning_insert_no_returning
+                        time:   [14.535 ns 14.573 ns 14.612 ns]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking returning_insert_with_returning
+Benchmarking returning_insert_with_returning: Warming up for 3.0000 s
+Benchmarking returning_insert_with_returning: Collecting 100 samples in estimated 5.0008 s (5.1M iterations)
+Benchmarking returning_insert_with_returning: Analyzing
+returning_insert_with_returning
+                        time:   [925.54 ns 927.18 ns 928.81 ns]
+
+Benchmarking returning_cte_wrapped
+Benchmarking returning_cte_wrapped: Warming up for 3.0000 s
+Benchmarking returning_cte_wrapped: Collecting 100 samples in estimated 5.0038 s (4.9M iterations)
+Benchmarking returning_cte_wrapped: Analyzing
+returning_cte_wrapped   time:   [1.0413 µs 1.0452 µs 1.0489 µs]
+

@@ -64,3 +64,7 @@ harness = false
 [[bench]]
 name = "mask_bench"
 harness = false
+
+[[bench]]
+name = "returning_bench"
+harness = false
