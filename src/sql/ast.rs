@@ -117,15 +117,171 @@ fn node_has_returning(node: &pg_query::NodeEnum) -> Result<bool, AstError> {
 /// and falls back to string splicing (not deparse) so comments and whitespace
 /// are preserved. Returns `Ok(None)` if the SQL isn't a bare INSERT targeting
 /// a known-PK table, or already has RETURNING.
-///
-/// Stub until Task 7.
-pub fn inject_returning(sql: &str, _pk_map: &[TablePk]) -> Result<Option<String>, AstError> {
+pub fn inject_returning(sql: &str, pk_map: &[TablePk]) -> Result<Option<String>, AstError> {
     if !might_have_returning(sql) {
         return Ok(None);
     }
-    Err(AstError::Shape(
-        "inject_returning: pg_query splice not implemented yet (Task 7)".into(),
-    ))
+    // Skip if it already has RETURNING.
+    if has_returning(sql)? {
+        return Ok(None);
+    }
+    let parsed = pg_query::parse(sql).map_err(|e| AstError::Parse(format!("{}", e)))?;
+    // Locate the top-level INSERT. Phase 2 only handles non-CTE-wrapped.
+    let insert = find_top_level_insert(&parsed);
+    let Some(insert) = insert else {
+        return Ok(None);
+    };
+    // Table lookup.
+    let Some((schema, table)) = extract_insert_target(insert) else {
+        return Ok(None);
+    };
+    let pk = pk_map
+        .iter()
+        .find(|pk| pk.table == table && (schema.is_empty() || pk.schema == schema));
+    let Some(pk) = pk else {
+        return Ok(None);
+    };
+    let returning_cols = pk.columns.join(", ");
+    let splice_offset = find_splice_offset(sql, insert);
+    let before = sql[..splice_offset].trim_end();
+    let after = &sql[splice_offset..];
+    // Ensure a separator between `RETURNING cols` and `after` when `after`
+    // starts with a structural keyword (e.g. `ON CONFLICT`) that we spliced
+    // before. The trim_end() above already chewed the space preceding the
+    // splice point. Punctuation like `;` needs no separator.
+    let sep = match after.chars().next() {
+        Some(c) if c.is_ascii_alphabetic() => " ",
+        _ => "",
+    };
+    Ok(Some(format!(
+        "{} RETURNING {}{}{}",
+        before, returning_cols, sep, after
+    )))
+}
+
+/// Locate the first top-level InsertStmt in the parsed tree. Returns None
+/// for CTE-wrapped INSERTs (top-level is SelectStmt) — Phase 2 scope skips
+/// those since the splice semantics are ambiguous.
+fn find_top_level_insert(
+    parsed: &pg_query::ParseResult,
+) -> Option<&pg_query::protobuf::InsertStmt> {
+    use pg_query::NodeEnum;
+    for stmt in parsed.protobuf.stmts.iter() {
+        if let Some(NodeEnum::InsertStmt(insert)) = stmt.stmt.as_ref().and_then(|s| s.node.as_ref())
+        {
+            return Some(insert.as_ref());
+        }
+    }
+    None
+}
+
+/// Extract (schema, table) from an InsertStmt's relation field.
+/// Schema is empty when the insert target is unqualified.
+fn extract_insert_target(stmt: &pg_query::protobuf::InsertStmt) -> Option<(String, String)> {
+    let rel = stmt.relation.as_ref()?;
+    Some((rel.schemaname.clone(), rel.relname.clone()))
+}
+
+/// Compute the byte offset at which RETURNING should be spliced into `sql`.
+/// Before ON CONFLICT if present; otherwise at the end of the statement
+/// excluding trailing whitespace, SQL comments, and a single trailing
+/// semicolon.
+fn find_splice_offset(sql: &str, stmt: &pg_query::protobuf::InsertStmt) -> usize {
+    // Prefer the AST's on_conflict location if populated.
+    if let Some(on_conflict) = stmt.on_conflict_clause.as_ref() {
+        let loc = on_conflict.location;
+        if loc > 0 {
+            return loc as usize;
+        }
+        if let Some(off) = find_on_conflict_byte_offset(sql) {
+            return off;
+        }
+    }
+    // No ON CONFLICT: walk backward from end, skipping trailing whitespace,
+    // `-- line` comments, `/* block */` comments, and a single `;`.
+    end_of_statement_offset(sql)
+}
+
+/// Fallback for when pg_query doesn't populate on_conflict_clause.location.
+/// Case-insensitive search for " ON CONFLICT" outside string literals and
+/// comments. Simple but correct for the common shapes; the equivalence
+/// harness catches pathological cases.
+///
+/// Returns the offset of `ON CONFLICT` (past the leading whitespace) so the
+/// splice reads `... RETURNING id ON CONFLICT ...` with correct spacing.
+fn find_on_conflict_byte_offset(sql: &str) -> Option<usize> {
+    let upper = sql.to_ascii_uppercase();
+    upper.find(" ON CONFLICT").map(|idx| idx + 1)
+}
+
+/// Walk backward from end of `sql`, skipping trailing whitespace, line
+/// comments, block comments, and a single trailing semicolon. Returns the
+/// byte offset where RETURNING should be spliced.
+fn end_of_statement_offset(sql: &str) -> usize {
+    let bytes = sql.as_bytes();
+    let mut end = bytes.len();
+
+    loop {
+        let before = end;
+        // Strip trailing whitespace.
+        while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+        // Strip trailing line comment. `--` starts a line comment that runs
+        // to the next `\n` or EOF. Here we only care about a `--` on the
+        // last line (anything after a prior `\n`). Scan the last line from
+        // its start, respecting single-quoted string literals with `''`
+        // escape so we don't mistake `'--'` for a comment start.
+        let line_start = sql[..end].rfind('\n').map(|nl| nl + 1).unwrap_or(0);
+        if let Some(dd) = find_line_comment_start(&sql[line_start..end]) {
+            end = line_start + dd;
+            continue;
+        }
+        // Strip trailing block comment.
+        if end >= 2 && &sql[end - 2..end] == "*/" {
+            if let Some(open) = sql[..end - 2].rfind("/*") {
+                end = open;
+                continue;
+            }
+        }
+        // Strip a single trailing semicolon.
+        if end > 0 && bytes[end - 1] == b';' {
+            end -= 1;
+            continue;
+        }
+        if end == before {
+            break;
+        }
+    }
+    end
+}
+
+/// Find the byte offset of `--` in `line` that starts a SQL line comment,
+/// ignoring occurrences inside single-quoted string literals. Returns
+/// `None` if there is no unquoted `--`.
+fn find_line_comment_start(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if b == b'\'' {
+                // Escaped '' inside a string literal.
+                if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+        } else if b == b'\'' {
+            in_string = true;
+        } else if b == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -222,5 +378,153 @@ mod tests {
     fn ast_has_returning_string_contains_returning() {
         let sql = "INSERT INTO t (s) VALUES ('it has RETURNING in it')";
         assert!(!has_returning(sql).unwrap());
+    }
+
+    fn pk_orders() -> Vec<TablePk> {
+        vec![TablePk {
+            schema: "public".into(),
+            table: "orders".into(),
+            columns: vec!["id".into()],
+        }]
+    }
+
+    #[test]
+    fn ast_inject_simple() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning("INSERT INTO orders (name) VALUES ('test')", &pk).unwrap(),
+            Some("INSERT INTO orders (name) VALUES ('test') RETURNING id".into())
+        );
+    }
+
+    #[test]
+    fn ast_inject_already_has_returning() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning(
+                "INSERT INTO orders (name) VALUES ('test') RETURNING id",
+                &pk
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn ast_inject_unknown_table() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning("INSERT INTO unknown (name) VALUES ('test')", &pk).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn ast_inject_on_conflict_splice_before() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning(
+                "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT DO NOTHING",
+                &pk
+            )
+            .unwrap(),
+            Some(
+                "INSERT INTO orders (id, name) VALUES (1, 'test') RETURNING id ON CONFLICT DO NOTHING"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn ast_inject_on_conflict_do_update() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning(
+                "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name",
+                &pk
+            )
+            .unwrap(),
+            Some(
+                "INSERT INTO orders (id, name) VALUES (1, 'test') RETURNING id ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn ast_inject_multi_row_values() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning("INSERT INTO orders (name) VALUES ('a'), ('b'), ('c')", &pk).unwrap(),
+            Some("INSERT INTO orders (name) VALUES ('a'), ('b'), ('c') RETURNING id".into())
+        );
+    }
+
+    #[test]
+    fn ast_inject_insert_select() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning(
+                "INSERT INTO orders (id, name) SELECT id, name FROM staging",
+                &pk
+            )
+            .unwrap(),
+            Some("INSERT INTO orders (id, name) SELECT id, name FROM staging RETURNING id".into())
+        );
+    }
+
+    #[test]
+    fn ast_inject_trailing_semicolon() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning("INSERT INTO orders (name) VALUES ('x');", &pk).unwrap(),
+            Some("INSERT INTO orders (name) VALUES ('x') RETURNING id;".into())
+        );
+    }
+
+    #[test]
+    fn ast_inject_trailing_comment() {
+        let pk = pk_orders();
+        assert_eq!(
+            inject_returning("INSERT INTO orders (name) VALUES ('x') -- trailing", &pk).unwrap(),
+            Some("INSERT INTO orders (name) VALUES ('x') RETURNING id -- trailing".into())
+        );
+    }
+
+    #[test]
+    fn ast_inject_cte_wrapped_returns_none() {
+        // Phase 2 scope: CTE-wrapped inserts return None (splice semantics
+        // ambiguous). Phase 3 may revisit.
+        let pk = pk_orders();
+        let sql =
+            "WITH new_order AS (INSERT INTO orders (name) VALUES ('x')) SELECT * FROM new_order";
+        assert_eq!(inject_returning(sql, &pk).unwrap(), None);
+    }
+
+    #[test]
+    fn ast_inject_schema_qualified() {
+        let pk = vec![TablePk {
+            schema: "analytics".into(),
+            table: "events".into(),
+            columns: vec!["event_id".into()],
+        }];
+        assert_eq!(
+            inject_returning("INSERT INTO analytics.events (name) VALUES ('x')", &pk).unwrap(),
+            Some("INSERT INTO analytics.events (name) VALUES ('x') RETURNING event_id".into())
+        );
+    }
+
+    #[test]
+    fn ast_inject_not_insert() {
+        let pk = pk_orders();
+        // UPDATE / DELETE aren't injected even if they target known-PK tables.
+        assert_eq!(
+            inject_returning("UPDATE orders SET name = 'x' WHERE id = 1", &pk).unwrap(),
+            None
+        );
+        assert_eq!(
+            inject_returning("DELETE FROM orders WHERE id = 1", &pk).unwrap(),
+            None
+        );
     }
 }

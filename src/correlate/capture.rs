@@ -208,7 +208,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -253,7 +252,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning_on_conflict() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -274,7 +272,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning_on_conflict_do_update() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -304,7 +301,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning_insert_select() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
