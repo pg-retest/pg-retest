@@ -85,13 +85,27 @@ impl<'a> Iterator for SqlLexer<'a> {
 
         // Whitespace run
         if first.is_whitespace() {
-            let end = rest
-                .char_indices()
-                .take_while(|(_, c)| c.is_whitespace())
-                .last()
-                .map(|(i, c)| start + i + c.len_utf8())
-                .unwrap_or(start + first.len_utf8());
-            return Some(self.emit(TokenKind::Whitespace, start, end));
+            let bytes = rest.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                let b = bytes[i];
+                if b < 0x80 {
+                    // ASCII fast path
+                    if b.is_ascii_whitespace() {
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+                // Non-ASCII cold path: check for Unicode whitespace
+                let ch = rest[i..].chars().next().expect("non-empty non-ASCII slice");
+                if ch.is_whitespace() {
+                    i += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            return Some(self.emit(TokenKind::Whitespace, start, start + i));
         }
 
         // Single-quoted string literal (with '' escape)
@@ -128,13 +142,27 @@ impl<'a> Iterator for SqlLexer<'a> {
 
         // Identifier
         if first.is_alphabetic() || first == '_' {
-            let end = rest
-                .char_indices()
-                .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
-                .last()
-                .map(|(i, c)| start + i + c.len_utf8())
-                .unwrap_or(start + first.len_utf8());
-            return Some(self.emit(TokenKind::Ident, start, end));
+            let bytes = rest.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                let b = bytes[i];
+                if b < 0x80 {
+                    // ASCII fast path
+                    if b.is_ascii_alphanumeric() || b == b'_' {
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+                // Non-ASCII cold path: check for Unicode ident char
+                let ch = rest[i..].chars().next().expect("non-empty non-ASCII slice");
+                if ch.is_alphanumeric() || ch == '_' {
+                    i += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            return Some(self.emit(TokenKind::Ident, start, start + i));
         }
 
         // Single-char punctuation fallback.
