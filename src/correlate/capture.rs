@@ -16,75 +16,120 @@ pub struct TablePk {
     pub columns: Vec<String>,
 }
 
-/// Check if SQL contains a RETURNING clause (not inside a string literal).
+/// Dispatch wrapper: delegates to the pg_query-backed impl by default, or
+/// the legacy hand-rolled impl when the `legacy-returning` feature is on.
+///
+/// Returns `false` on parse errors as the safe default (matches prior
+/// behavior: uncertain input is treated as "no RETURNING").
 pub fn has_returning(sql: &str) -> bool {
-    let upper = sql.to_uppercase();
-    if !upper.contains("RETURNING") {
-        return false;
+    #[cfg(feature = "legacy-returning")]
+    {
+        legacy::has_returning(sql)
     }
-    let mut in_string = false;
-    let chars: Vec<char> = sql.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\'' {
-            if in_string && i + 1 < chars.len() && chars[i + 1] == '\'' {
-                i += 2;
-                continue;
-            }
-            in_string = !in_string;
-        } else if !in_string && i + 9 <= chars.len() {
-            let chunk: String = chars[i..i + 9].iter().collect();
-            if chunk.eq_ignore_ascii_case("RETURNING") {
-                let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
-                let after_ok = i + 9 >= chars.len() || !chars[i + 9].is_alphanumeric();
-                if before_ok && after_ok {
-                    return true;
-                }
-            }
-        }
-        i += 1;
+    #[cfg(not(feature = "legacy-returning"))]
+    {
+        crate::sql::ast::has_returning(sql).unwrap_or(false)
     }
-    false
 }
 
-/// If SQL is a bare INSERT (no RETURNING) targeting a known PK table, return modified SQL with RETURNING appended.
+/// Dispatch wrapper: delegates to the pg_query-backed impl by default.
+///
+/// The AST-backed `inject_returning` ships in Task 7 — until it lands, the
+/// default build routes to the stub which returns `Err(Shape)` for candidates;
+/// the wrapper maps `Err`/`Ok(None)` to `None`, so every candidate path
+/// produces `None`. This means ID-correlation RETURNING injection is a no-op
+/// on the default build between this commit and Task 7. Real functionality
+/// returns when Task 7 ships. For tests and runtime testing in the interim,
+/// build with `--features legacy-returning`.
 pub fn inject_returning(sql: &str, pk_map: &[TablePk]) -> Option<String> {
-    if has_returning(sql) {
-        return None;
+    #[cfg(feature = "legacy-returning")]
+    {
+        legacy::inject_returning(sql, pk_map)
     }
-    let upper = sql.trim_start().to_uppercase();
-    if !upper.starts_with("INSERT") {
-        return None;
+    #[cfg(not(feature = "legacy-returning"))]
+    {
+        crate::sql::ast::inject_returning(sql, pk_map)
+            .ok()
+            .flatten()
+    }
+}
+
+/// Hand-rolled pre-Phase-2 implementations. Removed in the release
+/// after rc.4 per SC-011.
+#[cfg(feature = "legacy-returning")]
+mod legacy {
+    use super::TablePk;
+
+    /// Check if SQL contains a RETURNING clause (not inside a string literal).
+    pub fn has_returning(sql: &str) -> bool {
+        let upper = sql.to_uppercase();
+        if !upper.contains("RETURNING") {
+            return false;
+        }
+        let mut in_string = false;
+        let chars: Vec<char> = sql.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '\'' {
+                if in_string && i + 1 < chars.len() && chars[i + 1] == '\'' {
+                    i += 2;
+                    continue;
+                }
+                in_string = !in_string;
+            } else if !in_string && i + 9 <= chars.len() {
+                let chunk: String = chars[i..i + 9].iter().collect();
+                if chunk.eq_ignore_ascii_case("RETURNING") {
+                    let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
+                    let after_ok = i + 9 >= chars.len() || !chars[i + 9].is_alphanumeric();
+                    if before_ok && after_ok {
+                        return true;
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
     }
 
-    // Extract table name after INTO
-    let into_pos = upper.find("INTO ")?;
-    let after_into = sql[into_pos + 5..].trim_start();
-    let table_name: String = after_into
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '"')
-        .collect();
+    /// If SQL is a bare INSERT (no RETURNING) targeting a known PK table, return modified SQL with RETURNING appended.
+    pub fn inject_returning(sql: &str, pk_map: &[TablePk]) -> Option<String> {
+        if has_returning(sql) {
+            return None;
+        }
+        let upper = sql.trim_start().to_uppercase();
+        if !upper.starts_with("INSERT") {
+            return None;
+        }
 
-    let table_clean = table_name.replace('"', "");
-    let pk = pk_map.iter().find(|pk| {
-        let qualified = format!("{}.{}", pk.schema, pk.table);
-        table_clean == pk.table || table_clean == qualified
-    })?;
+        // Extract table name after INTO
+        let into_pos = upper.find("INTO ")?;
+        let after_into = sql[into_pos + 5..].trim_start();
+        let table_name: String = after_into
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '"')
+            .collect();
 
-    let returning_cols = pk.columns.join(", ");
-    let trimmed = sql.trim_end().trim_end_matches(';');
+        let table_clean = table_name.replace('"', "");
+        let pk = pk_map.iter().find(|pk| {
+            let qualified = format!("{}.{}", pk.schema, pk.table);
+            table_clean == pk.table || table_clean == qualified
+        })?;
 
-    // RETURNING must come BEFORE ON CONFLICT if present
-    let upper_trimmed = trimmed.to_uppercase();
-    if let Some(conflict_pos) = upper_trimmed.find(" ON CONFLICT") {
-        let before_conflict = &trimmed[..conflict_pos];
-        let conflict_clause = &trimmed[conflict_pos..];
-        Some(format!(
-            "{} RETURNING {}{}",
-            before_conflict, returning_cols, conflict_clause
-        ))
-    } else {
-        Some(format!("{} RETURNING {}", trimmed, returning_cols))
+        let returning_cols = pk.columns.join(", ");
+        let trimmed = sql.trim_end().trim_end_matches(';');
+
+        // RETURNING must come BEFORE ON CONFLICT if present
+        let upper_trimmed = trimmed.to_uppercase();
+        if let Some(conflict_pos) = upper_trimmed.find(" ON CONFLICT") {
+            let before_conflict = &trimmed[..conflict_pos];
+            let conflict_clause = &trimmed[conflict_pos..];
+            Some(format!(
+                "{} RETURNING {}{}",
+                before_conflict, returning_cols, conflict_clause
+            ))
+        } else {
+            Some(format!("{} RETURNING {}", trimmed, returning_cols))
+        }
     }
 }
 
@@ -163,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -207,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning_on_conflict() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -227,6 +274,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning_on_conflict_do_update() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -256,6 +304,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-returning")]
     fn test_inject_returning_insert_select() {
         let pk_map = vec![TablePk {
             schema: "public".into(),
@@ -269,5 +318,27 @@ mod tests {
             ),
             Some("INSERT INTO orders (id, name) SELECT id, name FROM staging RETURNING id".into())
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "legacy-returning"))]
+    fn ast_dispatch_has_returning() {
+        assert!(has_returning("INSERT INTO t VALUES (1) RETURNING id"));
+        assert!(!has_returning("SELECT 1"));
+        // Invalid SQL collapses to false via Result::unwrap_or(false).
+        assert!(!has_returning("INSERT INTO"));
+        // CTE-wrapped — bug class in legacy, works now
+        assert!(has_returning(
+            "WITH new AS (INSERT INTO t VALUES (1) RETURNING id) SELECT * FROM new"
+        ));
+        // Quoted column alias "returning" — bug class in legacy, works now
+        assert!(!has_returning("SELECT col AS \"returning\" FROM t"));
+    }
+
+    #[test]
+    #[cfg(feature = "legacy-returning")]
+    fn legacy_dispatch_has_returning() {
+        assert!(has_returning("INSERT INTO t VALUES (1) RETURNING id"));
+        assert!(!has_returning("SELECT 1"));
     }
 }

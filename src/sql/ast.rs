@@ -62,21 +62,55 @@ fn skip_leading_whitespace_and_comments(sql: &str) -> &str {
 }
 
 /// AST-backed `has_returning`. Returns `Ok(true)` iff the top-level statement
-/// (after stripping any enclosing `WITH` CTE wrapper) is an INSERT, UPDATE,
-/// DELETE, or MERGE with a non-empty `returningList`. Returns `Ok(false)`
-/// for SELECT, DDL, and DML without RETURNING. Returns `Err(AstError::Parse)`
-/// on syntactically invalid input — callers should treat this as the safe
+/// (or any CTE nested under a top-level `WITH`) is an INSERT, UPDATE, DELETE,
+/// or MERGE with a non-empty `returning_list`. Returns `Ok(false)` for SELECT,
+/// DDL, and DML without RETURNING. Returns `Err(AstError::Parse)` on
+/// syntactically invalid input — callers should treat this as the safe
 /// default (usually "assume no RETURNING").
-///
-/// Stub until Task 5: always returns Err(Shape) when the prefilter passes,
-/// so tests written against the final shape fail loudly.
 pub fn has_returning(sql: &str) -> Result<bool, AstError> {
     if !might_have_returning(sql) {
         return Ok(false);
     }
-    Err(AstError::Shape(
-        "has_returning: pg_query traversal not implemented yet (Task 5)".into(),
-    ))
+    let parsed = pg_query::parse(sql).map_err(|e| AstError::Parse(format!("{}", e)))?;
+    for raw in parsed.protobuf.stmts.iter() {
+        if let Some(node) = raw.stmt.as_ref().and_then(|s| s.node.as_ref()) {
+            if node_has_returning(node)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Walk a single statement node and detect RETURNING. Recurses into
+/// `WITH`-wrapped writes: a SELECT with a `with_clause` whose CTE queries
+/// include a DML with RETURNING counts as having RETURNING.
+fn node_has_returning(node: &pg_query::NodeEnum) -> Result<bool, AstError> {
+    use pg_query::NodeEnum as N;
+    match node {
+        N::InsertStmt(s) => Ok(!s.returning_list.is_empty()),
+        N::UpdateStmt(s) => Ok(!s.returning_list.is_empty()),
+        N::DeleteStmt(s) => Ok(!s.returning_list.is_empty()),
+        N::MergeStmt(s) => Ok(!s.returning_list.is_empty()),
+        // Top-level SELECT may wrap a data-modifying CTE.
+        N::SelectStmt(s) => {
+            if let Some(with) = s.with_clause.as_ref() {
+                for cte_node in with.ctes.iter() {
+                    if let Some(N::CommonTableExpr(cte)) = cte_node.node.as_ref() {
+                        if let Some(q) = cte.ctequery.as_ref() {
+                            if let Some(inner) = q.node.as_ref() {
+                                if node_has_returning(inner)? {
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
 }
 
 /// AST-backed `inject_returning`. Uses pg_query to identify the splice point
@@ -140,15 +174,53 @@ mod tests {
     }
 
     #[test]
-    fn stub_has_returning_returns_ok_false_for_non_candidate() {
-        // The stub must correctly short-circuit on the prefilter.
-        assert!(!has_returning("SELECT 1").unwrap());
+    fn ast_has_returning_simple() {
+        assert!(has_returning("INSERT INTO t VALUES (1) RETURNING id").unwrap());
+        assert!(!has_returning("INSERT INTO t VALUES (1)").unwrap());
     }
 
     #[test]
-    fn stub_has_returning_returns_err_for_candidate() {
-        // The stub must return Err (not panic, not wrong answer) for candidates.
-        // Tasks 5 replaces this behavior with a real walk.
-        assert!(has_returning("INSERT INTO t VALUES (1)").is_err());
+    fn ast_has_returning_update_delete() {
+        assert!(has_returning("UPDATE t SET a = 1 RETURNING id").unwrap());
+        assert!(has_returning("DELETE FROM t WHERE id = 1 RETURNING id").unwrap());
+        assert!(!has_returning("UPDATE t SET a = 1").unwrap());
+    }
+
+    #[test]
+    fn ast_has_returning_cte_wrapped() {
+        let sql = "WITH new_order AS (INSERT INTO orders (customer_id) VALUES (42) RETURNING id) SELECT * FROM new_order";
+        assert!(has_returning(sql).unwrap());
+    }
+
+    #[test]
+    fn ast_has_returning_cte_no_returning_inside() {
+        let sql = "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x";
+        assert!(!has_returning(sql).unwrap());
+    }
+
+    #[test]
+    fn ast_has_returning_returning_as_column_alias() {
+        // A column named "returning" must NOT trigger true — bug class in legacy.
+        let sql = "SELECT col AS \"returning\" FROM t";
+        assert!(!has_returning(sql).unwrap());
+    }
+
+    #[test]
+    fn ast_has_returning_returning_in_comment() {
+        assert!(!has_returning("-- RETURNING\nSELECT 1").unwrap());
+        assert!(!has_returning("/* RETURNING id */ SELECT 1").unwrap());
+    }
+
+    #[test]
+    fn ast_has_returning_invalid_sql() {
+        // Unparseable returns Err — callers map to safe default.
+        let result = has_returning("INSERT INTO");
+        assert!(result.is_err(), "expected parse error for truncated INSERT");
+    }
+
+    #[test]
+    fn ast_has_returning_string_contains_returning() {
+        let sql = "INSERT INTO t (s) VALUES ('it has RETURNING in it')";
+        assert!(!has_returning(sql).unwrap());
     }
 }
