@@ -1,0 +1,84 @@
+   Compiling ring v0.17.14
+   Compiling powerfmt v0.2.0
+   Compiling num-conv v0.2.1
+   Compiling time-core v0.1.8
+   Compiling pem v3.0.6
+   Compiling deranged v0.5.8
+   Compiling time v0.3.47
+   Compiling yasna v0.5.2
+   Compiling tokio-postgres-rustls v0.13.0
+   Compiling rcgen v0.13.2
+   Compiling pg-retest v1.0.0-rc.4 (/home/yonk/yonk-apps/pg-retest)
+    Finished `bench` profile [optimized] target(s) in 19.62s
+     Running benches/substitute_bench.rs (target/release/deps/substitute_bench-02bebdd100e96701)
+Gnuplot not found, using plotters backend
+Benchmarking substitute_no_map
+Benchmarking substitute_no_map: Warming up for 3.0000 s
+Benchmarking substitute_no_map: Collecting 100 samples in estimated 5.0030 s (5.2M iterations)
+Benchmarking substitute_no_map: Analyzing
+substitute_no_map       time:   [955.85 ns 958.37 ns 961.24 ns]
+                        change: [-0.8570% -0.6884% -0.4907%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 8 outliers among 100 measurements (8.00%)
+  4 (4.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking substitute_small_map
+Benchmarking substitute_small_map: Warming up for 3.0000 s
+Benchmarking substitute_small_map: Collecting 100 samples in estimated 5.0001 s (3.6M iterations)
+Benchmarking substitute_small_map: Analyzing
+substitute_small_map    time:   [1.3796 µs 1.3807 µs 1.3820 µs]
+                        change: [+3.7187% +3.9191% +4.0998%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 11 outliers among 100 measurements (11.00%)
+  1 (1.00%) low mild
+  5 (5.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking substitute_large_map
+Benchmarking substitute_large_map: Warming up for 3.0000 s
+Benchmarking substitute_large_map: Collecting 100 samples in estimated 5.0047 s (3.6M iterations)
+Benchmarking substitute_large_map: Analyzing
+substitute_large_map    time:   [1.4065 µs 1.4083 µs 1.4103 µs]
+                        change: [+7.8770% +8.1353% +8.4916%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking substitute_complex_query
+Benchmarking substitute_complex_query: Warming up for 3.0000 s
+Benchmarking substitute_complex_query: Collecting 100 samples in estimated 5.0040 s (2.5M iterations)
+Benchmarking substitute_complex_query: Analyzing
+substitute_complex_query
+                        time:   [1.9797 µs 1.9837 µs 1.9882 µs]
+                        change: [+5.0422% +5.2278% +5.4401%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+
+Benchmarking substitute_uuid_heavy
+Benchmarking substitute_uuid_heavy: Warming up for 3.0000 s
+Benchmarking substitute_uuid_heavy: Collecting 100 samples in estimated 5.0024 s (2.8M iterations)
+Benchmarking substitute_uuid_heavy: Analyzing
+substitute_uuid_heavy   time:   [1.8036 µs 1.8054 µs 1.8073 µs]
+                        change: [-12.172% -12.041% -11.918%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low severe
+  2 (2.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking returning_detection_1000
+Benchmarking returning_detection_1000: Warming up for 3.0000 s
+Benchmarking returning_detection_1000: Collecting 100 samples in estimated 5.7656 s (30k iterations)
+Benchmarking returning_detection_1000: Analyzing
+returning_detection_1000
+                        time:   [193.67 µs 194.37 µs 195.12 µs]
+                        change: [+6.1342% +6.8859% +7.6328%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+

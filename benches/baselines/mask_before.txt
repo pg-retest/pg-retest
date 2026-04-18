@@ -1,0 +1,41 @@
+   Compiling pg-retest v1.0.0-rc.4 (/home/yonk/yonk-apps/pg-retest)
+    Finished `bench` profile [optimized] target(s) in 0.69s
+     Running benches/mask_bench.rs (target/release/deps/mask_bench-1faebe410e97af53)
+Gnuplot not found, using plotters backend
+Benchmarking mask_simple
+Benchmarking mask_simple: Warming up for 3.0000 s
+Benchmarking mask_simple: Collecting 100 samples in estimated 5.0005 s (46M iterations)
+Benchmarking mask_simple: Analyzing
+mask_simple             time:   [107.88 ns 108.02 ns 108.18 ns]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+
+Benchmarking mask_many_literals
+Benchmarking mask_many_literals: Warming up for 3.0000 s
+Benchmarking mask_many_literals: Collecting 100 samples in estimated 5.0011 s (17M iterations)
+Benchmarking mask_many_literals: Analyzing
+mask_many_literals      time:   [291.51 ns 291.90 ns 292.32 ns]
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low mild
+  5 (5.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking mask_no_literals
+Benchmarking mask_no_literals: Warming up for 3.0000 s
+Benchmarking mask_no_literals: Collecting 100 samples in estimated 5.0010 s (21M iterations)
+Benchmarking mask_no_literals: Analyzing
+mask_no_literals        time:   [238.96 ns 239.20 ns 239.47 ns]
+Found 12 outliers among 100 measurements (12.00%)
+  4 (4.00%) high mild
+  8 (8.00%) high severe
+
+Benchmarking mask_dollar_quoted
+Benchmarking mask_dollar_quoted: Warming up for 3.0000 s
+Benchmarking mask_dollar_quoted: Collecting 100 samples in estimated 5.0004 s (35M iterations)
+Benchmarking mask_dollar_quoted: Analyzing
+mask_dollar_quoted      time:   [141.15 ns 141.26 ns 141.39 ns]
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) high mild
+  5 (5.00%) high severe
+
