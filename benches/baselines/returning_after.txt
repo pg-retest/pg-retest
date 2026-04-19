@@ -1,0 +1,42 @@
+   Compiling pg-retest v1.0.0-rc.4 (/home/yonk/yonk-apps/pg-retest)
+    Finished `bench` profile [optimized] target(s) in 17.44s
+     Running benches/returning_bench.rs (target/release/deps/returning_bench-806d13b783ee4bb9)
+Gnuplot not found, using plotters backend
+Benchmarking returning_select_skipped
+Benchmarking returning_select_skipped: Warming up for 3.0000 s
+Benchmarking returning_select_skipped: Collecting 100 samples in estimated 5.0000 s (232M iterations)
+Benchmarking returning_select_skipped: Analyzing
+returning_select_skipped
+                        time:   [21.337 ns 21.416 ns 21.506 ns]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking returning_insert_no_returning
+Benchmarking returning_insert_no_returning: Warming up for 3.0000 s
+Benchmarking returning_insert_no_returning: Collecting 100 samples in estimated 5.0043 s (1.1M iterations)
+Benchmarking returning_insert_no_returning: Analyzing
+returning_insert_no_returning
+                        time:   [4.4910 µs 4.4955 µs 4.5011 µs]
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking returning_insert_with_returning
+Benchmarking returning_insert_with_returning: Warming up for 3.0000 s
+Benchmarking returning_insert_with_returning: Collecting 100 samples in estimated 5.0228 s (828k iterations)
+Benchmarking returning_insert_with_returning: Analyzing
+returning_insert_with_returning
+                        time:   [5.9992 µs 6.0020 µs 6.0051 µs]
+Found 6 outliers among 100 measurements (6.00%)
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking returning_cte_wrapped
+Benchmarking returning_cte_wrapped: Warming up for 3.0000 s
+Benchmarking returning_cte_wrapped: Collecting 100 samples in estimated 5.0040 s (591k iterations)
+Benchmarking returning_cte_wrapped: Analyzing
+returning_cte_wrapped   time:   [8.4100 µs 8.4178 µs 8.4271 µs]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
