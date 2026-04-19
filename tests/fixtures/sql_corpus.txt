@@ -1,0 +1,108 @@
+# sql_corpus.txt — pg_query equivalence harness corpus (SC-008).
+# 100+ SQL statements, one per non-blank non-# line.
+# Used by tests/pg_query_equivalence.rs to assert the AST-backed
+# has_returning agrees with pg_query's direct AST answer on each line.
+# Phase 3 will extend this corpus with extract_tables and
+# extract_filter_columns oracles.
+SELECT 1
+SELECT * FROM users
+SELECT * FROM users WHERE id = 42
+SELECT id, name FROM users ORDER BY id LIMIT 10 OFFSET 20
+SELECT u.id, u.name, p.title FROM users u INNER JOIN posts p ON p.user_id = u.id
+SELECT count(*) FROM users GROUP BY created_at::date HAVING count(*) > 10
+SELECT * FROM users u LEFT JOIN (SELECT user_id, max(created_at) AS last FROM logs GROUP BY user_id) l ON l.user_id = u.id
+SELECT u.id, (SELECT count(*) FROM posts p WHERE p.user_id = u.id) AS post_count FROM users u
+SELECT id, sum(total) OVER (PARTITION BY user_id ORDER BY ts) AS running FROM payments
+SELECT DISTINCT ON (user_id) user_id, id FROM events ORDER BY user_id, ts DESC
+SELECT u.id, p.* FROM users u, LATERAL (SELECT * FROM posts WHERE user_id = u.id ORDER BY created_at DESC LIMIT 3) p
+SELECT data->'email' FROM users WHERE data @> '{"active":true}'
+SELECT * FROM t WHERE x IN (SELECT y FROM s WHERE s.z > 100)
+SELECT x, sum(y) FROM t GROUP BY GROUPING SETS ((x), (x, y), ())
+SELECT datname FROM pg_catalog.pg_database WHERE datname NOT LIKE 'template%'
+SELECT * FROM t WHERE id BETWEEN 10 AND 20 AND name LIKE 'foo%'
+SELECT * FROM t TABLESAMPLE BERNOULLI (10)
+SELECT current_setting('server_version')
+SELECT generate_series(1, 10) AS s
+SELECT array_agg(id ORDER BY created_at) FROM events
+INSERT INTO t (a) VALUES (1)
+INSERT INTO t (a, b) VALUES (1, 2), (3, 4), (5, 6)
+INSERT INTO t (a) SELECT x FROM s WHERE y > 100
+INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING
+INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a) DO UPDATE SET b = EXCLUDED.b
+INSERT INTO t (a) VALUES (1) RETURNING id
+INSERT INTO t (a) VALUES (1), (2) RETURNING id, a
+INSERT INTO t DEFAULT VALUES
+INSERT INTO t DEFAULT VALUES RETURNING id
+INSERT INTO public.t (a) VALUES (1)
+INSERT INTO analytics.events (ts, kind) VALUES (now(), 'click')
+INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING RETURNING id
+INSERT INTO t (a) SELECT x FROM s RETURNING t.*
+INSERT INTO t (a) SELECT x FROM s WHERE y IN (SELECT z FROM u) RETURNING id
+INSERT INTO t (a) VALUES (DEFAULT)
+INSERT INTO t (a, b) VALUES (1, DEFAULT), (DEFAULT, 2)
+INSERT INTO t SELECT * FROM s
+INSERT INTO t (a) VALUES ('''with quote''')
+INSERT INTO t (a) VALUES (E'raw\nwith newline')
+INSERT INTO t (a) VALUES ($$dollar$$)
+INSERT INTO t (a) VALUES ($tag$tagged$tag$)
+UPDATE t SET a = 1
+UPDATE t SET a = 1 WHERE id = 10
+UPDATE t SET a = 1, b = 2 WHERE id = 10 RETURNING id
+UPDATE t SET a = (SELECT max(x) FROM s WHERE s.y = t.id) WHERE active
+UPDATE t SET a = u.a FROM u WHERE t.id = u.id
+UPDATE t SET a = 1 WHERE id IN (SELECT id FROM s)
+UPDATE public.t SET a = 1 WHERE id = 10
+UPDATE t SET a = a + 1
+UPDATE t SET data = data || '{"x":1}' WHERE id = 10
+UPDATE t SET a = CASE WHEN b > 0 THEN 1 ELSE 0 END
+UPDATE t SET a = 1 RETURNING *
+UPDATE t SET a = 1 WHERE updated_at < now() - interval '1 day'
+UPDATE orders SET status = 'cancelled' WHERE customer_id = 42 RETURNING id, total
+UPDATE t SET tsv = to_tsvector(content) WHERE id = 1
+UPDATE t SET a = 1 FROM s WHERE t.id = s.id AND s.y > 100 RETURNING t.id
+DELETE FROM t
+DELETE FROM t WHERE id = 10
+DELETE FROM t WHERE id IN (1, 2, 3)
+DELETE FROM t USING s WHERE t.id = s.id
+DELETE FROM t WHERE id IN (SELECT id FROM s)
+DELETE FROM t RETURNING id
+DELETE FROM t WHERE created_at < now() - interval '30 days' RETURNING *
+DELETE FROM public.t WHERE id = 10
+DELETE FROM orders WHERE status = 'cancelled' RETURNING id
+DELETE FROM t WHERE a IS NULL
+DELETE FROM t WHERE EXISTS (SELECT 1 FROM s WHERE s.t_id = t.id)
+DELETE FROM t USING s, u WHERE t.id = s.t_id AND s.u_id = u.id
+DELETE FROM t WHERE ctid = (SELECT ctid FROM t LIMIT 1)
+DELETE FROM t WHERE updated_at < now() - interval '1 day' RETURNING id, updated_at
+DELETE FROM analytics.events WHERE ts < now() - interval '90 days'
+WITH x AS (SELECT 1 AS id) SELECT * FROM x
+WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 10) SELECT * FROM r
+WITH x AS MATERIALIZED (SELECT * FROM s) SELECT * FROM x
+WITH x AS (INSERT INTO t (a) VALUES (1) RETURNING id) SELECT * FROM x
+WITH x AS (UPDATE t SET a = 1 RETURNING id) SELECT * FROM x
+WITH x AS (DELETE FROM t WHERE id = 1 RETURNING id) SELECT * FROM x
+WITH x AS (INSERT INTO t (a) VALUES (1)) SELECT 1
+WITH x AS (SELECT * FROM t), y AS (SELECT * FROM s) SELECT x.*, y.* FROM x JOIN y ON true
+WITH x AS (SELECT 1) INSERT INTO t (a) SELECT * FROM x
+WITH x AS (SELECT 1) DELETE FROM t WHERE id IN (SELECT * FROM x)
+CREATE TABLE t (id SERIAL PRIMARY KEY, name text NOT NULL)
+ALTER TABLE t ADD COLUMN created_at timestamptz DEFAULT now()
+CREATE INDEX idx_t_name ON t (name)
+CREATE UNIQUE INDEX idx_t_email ON t (email) WHERE email IS NOT NULL
+DROP TABLE IF EXISTS old_t
+TRUNCATE t
+CREATE TABLE child () INHERITS (parent)
+CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+ALTER TABLE t ALTER COLUMN name SET NOT NULL
+CREATE OR REPLACE VIEW v AS SELECT id, name FROM t
+MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.a)
+MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE
+MERGE INTO t USING (SELECT * FROM u) AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = s.a WHEN NOT MATCHED THEN DO NOTHING
+EXPLAIN SELECT * FROM t WHERE id = 10
+EXPLAIN (ANALYZE, BUFFERS) SELECT count(*) FROM t
+VACUUM t
+VACUUM (FULL, ANALYZE) t
+SELECT setval('t_id_seq', 100)
+SELECT query FROM pg_stat_statements WHERE total_exec_time > 1000 LIMIT 10
+SELECT * FROM pg_locks WHERE NOT granted
+SELECT pg_size_pretty(pg_total_relation_size('t'))
