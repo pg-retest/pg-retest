@@ -1,7 +1,7 @@
 INSERT INTO orders (name) VALUES ('x')|INSERT INTO orders (name) VALUES ('x') RETURNING id
 INSERT INTO orders (name) VALUES ('x'), ('y')|INSERT INTO orders (name) VALUES ('x'), ('y') RETURNING id
-INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT DO NOTHING|INSERT INTO orders (id, name) VALUES (1, 'x') RETURNING id ON CONFLICT DO NOTHING
-INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name|INSERT INTO orders (id, name) VALUES (1, 'x') RETURNING id ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT DO NOTHING|INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT DO NOTHING RETURNING id
+INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name|INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name RETURNING id
 INSERT INTO orders (name) SELECT name FROM staging|INSERT INTO orders (name) SELECT name FROM staging RETURNING id
 INSERT INTO orders (name) VALUES ('x');|INSERT INTO orders (name) VALUES ('x') RETURNING id;
 INSERT INTO orders (name) VALUES ('x') -- trailing comment|INSERT INTO orders (name) VALUES ('x') RETURNING id -- trailing comment

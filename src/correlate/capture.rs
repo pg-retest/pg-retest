@@ -118,18 +118,9 @@ mod legacy {
         let returning_cols = pk.columns.join(", ");
         let trimmed = sql.trim_end().trim_end_matches(';');
 
-        // RETURNING must come BEFORE ON CONFLICT if present
-        let upper_trimmed = trimmed.to_uppercase();
-        if let Some(conflict_pos) = upper_trimmed.find(" ON CONFLICT") {
-            let before_conflict = &trimmed[..conflict_pos];
-            let conflict_clause = &trimmed[conflict_pos..];
-            Some(format!(
-                "{} RETURNING {}{}",
-                before_conflict, returning_cols, conflict_clause
-            ))
-        } else {
-            Some(format!("{} RETURNING {}", trimmed, returning_cols))
-        }
+        // RETURNING goes at the END of the statement per PG grammar
+        // (INSERT ... [ ON CONFLICT ... ] [ RETURNING ... ]).
+        Some(format!("{} RETURNING {}", trimmed, returning_cols))
     }
 }
 
@@ -258,14 +249,13 @@ mod tests {
             table: "orders".into(),
             columns: vec!["id".into()],
         }];
-        // RETURNING must come BEFORE ON CONFLICT
         assert_eq!(
             inject_returning(
                 "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT DO NOTHING",
                 &pk_map
             ),
             Some(
-                "INSERT INTO orders (id, name) VALUES (1, 'test') RETURNING id ON CONFLICT DO NOTHING"
+                "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT DO NOTHING RETURNING id"
                     .into()
             )
         );
@@ -284,7 +274,7 @@ mod tests {
                 &pk_map
             ),
             Some(
-                "INSERT INTO orders (id, name) VALUES (1, 'test') RETURNING id ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
+                "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name RETURNING id"
                     .into()
             )
         );

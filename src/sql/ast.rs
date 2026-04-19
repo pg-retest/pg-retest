@@ -183,35 +183,14 @@ fn extract_insert_target(stmt: &pg_query::protobuf::InsertStmt) -> Option<(Strin
 }
 
 /// Compute the byte offset at which RETURNING should be spliced into `sql`.
-/// Before ON CONFLICT if present; otherwise at the end of the statement
-/// excluding trailing whitespace, SQL comments, and a single trailing
-/// semicolon.
-fn find_splice_offset(sql: &str, stmt: &pg_query::protobuf::InsertStmt) -> usize {
-    // Prefer the AST's on_conflict location if populated.
-    if let Some(on_conflict) = stmt.on_conflict_clause.as_ref() {
-        let loc = on_conflict.location;
-        if loc > 0 {
-            return loc as usize;
-        }
-        if let Some(off) = find_on_conflict_byte_offset(sql) {
-            return off;
-        }
-    }
-    // No ON CONFLICT: walk backward from end, skipping trailing whitespace,
-    // `-- line` comments, `/* block */` comments, and a single `;`.
-    end_of_statement_offset(sql)
-}
-
-/// Fallback for when pg_query doesn't populate on_conflict_clause.location.
-/// Case-insensitive search for " ON CONFLICT" outside string literals and
-/// comments. Simple but correct for the common shapes; the equivalence
-/// harness catches pathological cases.
+/// RETURNING goes at the END of the statement in all cases, per PG grammar:
 ///
-/// Returns the offset of `ON CONFLICT` (past the leading whitespace) so the
-/// splice reads `... RETURNING id ON CONFLICT ...` with correct spacing.
-fn find_on_conflict_byte_offset(sql: &str) -> Option<usize> {
-    let upper = sql.to_ascii_uppercase();
-    upper.find(" ON CONFLICT").map(|idx| idx + 1)
+///     INSERT ... VALUES (...) [ ON CONFLICT ... ] [ RETURNING ... ]
+///
+/// Walks backward from end of `sql`, skipping trailing whitespace, -- line
+/// comments, /* block */ comments, and a single trailing semicolon.
+fn find_splice_offset(sql: &str, _stmt: &pg_query::protobuf::InsertStmt) -> usize {
+    end_of_statement_offset(sql)
 }
 
 /// Walk backward from end of `sql`, skipping trailing whitespace, line
@@ -421,6 +400,8 @@ mod tests {
 
     #[test]
     fn ast_inject_on_conflict_splice_before() {
+        // Name retained for historical reasons; RETURNING now correctly appears
+        // AFTER ON CONFLICT per PG grammar (INSERT ... ON CONFLICT ... RETURNING ...).
         let pk = pk_orders();
         assert_eq!(
             inject_returning(
@@ -429,7 +410,7 @@ mod tests {
             )
             .unwrap(),
             Some(
-                "INSERT INTO orders (id, name) VALUES (1, 'test') RETURNING id ON CONFLICT DO NOTHING"
+                "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT DO NOTHING RETURNING id"
                     .into()
             )
         );
@@ -445,7 +426,7 @@ mod tests {
             )
             .unwrap(),
             Some(
-                "INSERT INTO orders (id, name) VALUES (1, 'test') RETURNING id ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name"
+                "INSERT INTO orders (id, name) VALUES (1, 'test') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name RETURNING id"
                     .into()
             )
         );
