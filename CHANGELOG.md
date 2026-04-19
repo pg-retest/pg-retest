@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **libpg_query (pg_query.rs 6.1.1) dependency** for AST-backed RETURNING
+  detection and injection. Requires a C compiler + libclang at build time
+  (documented in README Build prerequisites). CI installs libclang-dev
+  automatically. Binary size growth documented in commit aa8e92a.
+- **`legacy-returning` Cargo feature flag** compiles the pre-Phase-2
+  hand-rolled has_returning/inject_returning instead of the new pg_query-
+  backed impls. Rollback safety net; scheduled for removal in the release
+  after rc.4 per SC-011.
+- **pg_query equivalence harness** (`tests/pg_query_equivalence.rs`) over
+  a 102-query corpus covering SELECTs, DML variants, CTEs, DDL, MERGE, and
+  pg_catalog queries. Asserts has_returning agrees with a direct pg_query
+  AST oracle on every corpus entry.
+- **inject_returning corpus test** (`tests/sql_returning_corpus.rs`) with
+  16 shapes including ON CONFLICT DO NOTHING / DO UPDATE, multi-row
+  VALUES, INSERT-SELECT, DEFAULT VALUES, schema-qualified, composite PK,
+  trailing comment/semicolon.
+
 ### Fixed
 
 - **PII leak in `mask_sql_literals` for tagged dollar-quoted strings.** The
@@ -17,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position in the query. The rc.4 `SqlLexer` recognizes both forms and masks
   the whole token as `$S`. Applies to both proxy capture and CSV-log capture
   paths. Documented in `tests/sql_lexer_mask_snapshot.rs` module doc.
+- **`inject_returning` + ON CONFLICT produced invalid SQL in all prior
+  versions.** The legacy hand-rolled impl (and the initial Phase 2 AST
+  impl that inherited the wrong expected-output from a legacy unit test)
+  placed RETURNING BEFORE ON CONFLICT, producing `INSERT ... VALUES (...)
+  RETURNING id ON CONFLICT (id) DO UPDATE ...` which PostgreSQL rejects
+  with "syntax error at or near 'ON'". The PG grammar requires RETURNING
+  last: `INSERT ... [ ON CONFLICT ... ] [ RETURNING ... ]`. The bug
+  shipped latent because `--id-capture-implicit` + `INSERT ... ON
+  CONFLICT` is an uncommon combination, and prior unit tests asserted
+  string-pattern shape rather than PG parser acceptance. Caught by the
+  Phase 2 Docker demo E2E (DC-004) running captured ON CONFLICT traffic
+  through real PostgreSQL. Fixed for both AST and legacy impls in commit
+  d2b06a3. Live-verified against postgres:16.
 
 ### Changed
 
@@ -38,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change to mask/substitute output requires a deliberate
   `REGEN_SNAPSHOTS=1 cargo test` step, making silent behavior drift
   difficult.
+- **`has_returning` now uses libpg_query** by default. Correctly handles
+  CTE-wrapped writes (`WITH x AS (INSERT ... RETURNING id) SELECT ...`),
+  columns aliased as `"returning"`, the word `RETURNING` inside comments
+  or string literals, and MERGE with a returning list — all bug classes in
+  the legacy impl.
+- **`inject_returning` now uses libpg_query** by default. Splices RETURNING
+  at the END of the INSERT statement per PG grammar (after ON CONFLICT if
+  present, excluding trailing whitespace/comments/semicolons). Comments
+  and whitespace preserved — no deparse. CTE-wrapped inserts return None.
 
 ### Notes
 
