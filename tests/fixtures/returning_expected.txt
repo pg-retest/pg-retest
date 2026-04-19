@@ -1,0 +1,16 @@
+INSERT INTO orders (name) VALUES ('x')|INSERT INTO orders (name) VALUES ('x') RETURNING id
+INSERT INTO orders (name) VALUES ('x'), ('y')|INSERT INTO orders (name) VALUES ('x'), ('y') RETURNING id
+INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT DO NOTHING|INSERT INTO orders (id, name) VALUES (1, 'x') RETURNING id ON CONFLICT DO NOTHING
+INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name|INSERT INTO orders (id, name) VALUES (1, 'x') RETURNING id ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+INSERT INTO orders (name) SELECT name FROM staging|INSERT INTO orders (name) SELECT name FROM staging RETURNING id
+INSERT INTO orders (name) VALUES ('x');|INSERT INTO orders (name) VALUES ('x') RETURNING id;
+INSERT INTO orders (name) VALUES ('x') -- trailing comment|INSERT INTO orders (name) VALUES ('x') RETURNING id -- trailing comment
+INSERT INTO orders (name) VALUES ('x') /* trailing block */|INSERT INTO orders (name) VALUES ('x') RETURNING id /* trailing block */
+INSERT INTO analytics.events (name) VALUES ('x')|INSERT INTO analytics.events (name) VALUES ('x') RETURNING event_id
+INSERT INTO t (a_col, b_col) VALUES (1, 2)|INSERT INTO t (a_col, b_col) VALUES (1, 2) RETURNING a, b
+INSERT INTO orders DEFAULT VALUES|INSERT INTO orders DEFAULT VALUES RETURNING id
+INSERT INTO orders (name) VALUES ('x') RETURNING id|NONE
+INSERT INTO unknown_table (x) VALUES (1)|NONE
+UPDATE orders SET name = 'x' WHERE id = 1|NONE
+DELETE FROM orders WHERE id = 1|NONE
+WITH new_order AS (INSERT INTO orders (name) VALUES ('x')) SELECT * FROM new_order|NONE

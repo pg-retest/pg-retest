@@ -1,0 +1,23 @@
+# returning_corpus.txt — inject_returning SC-007 corpus.
+# 16 INSERT shapes. The pk_map used by the test has:
+#   public.orders       -> [id]
+#   analytics.events    -> [event_id]
+#   public.t            -> [a, b]   (composite PK)
+# Regenerate expected.txt via:
+#   REGEN_SNAPSHOTS=1 cargo test --test sql_returning_corpus
+INSERT INTO orders (name) VALUES ('x')
+INSERT INTO orders (name) VALUES ('x'), ('y')
+INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT DO NOTHING
+INSERT INTO orders (id, name) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
+INSERT INTO orders (name) SELECT name FROM staging
+INSERT INTO orders (name) VALUES ('x');
+INSERT INTO orders (name) VALUES ('x') -- trailing comment
+INSERT INTO orders (name) VALUES ('x') /* trailing block */
+INSERT INTO analytics.events (name) VALUES ('x')
+INSERT INTO t (a_col, b_col) VALUES (1, 2)
+INSERT INTO orders DEFAULT VALUES
+INSERT INTO orders (name) VALUES ('x') RETURNING id
+INSERT INTO unknown_table (x) VALUES (1)
+UPDATE orders SET name = 'x' WHERE id = 1
+DELETE FROM orders WHERE id = 1
+WITH new_order AS (INSERT INTO orders (name) VALUES ('x')) SELECT * FROM new_order
