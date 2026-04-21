@@ -168,6 +168,41 @@ pub async fn discover_primary_keys(
         .collect())
 }
 
+/// Probe the source database for extension-type OIDs the proxy's binary
+/// decoder knows about (pgvector's vector, halfvec, sparsevec). Returns an
+/// `ExtensionOids` struct with whichever were found; missing types stay
+/// `None` so binary-format parameters of unrecognized extension types fall
+/// back to the legacy `'<binary N bytes>'` placeholder.
+///
+/// Failures (connection refused, permissions) are logged by the caller; this
+/// function returns the partial map it managed to assemble.
+pub async fn discover_extension_oids(
+    client: &tokio_postgres::Client,
+) -> anyhow::Result<crate::proxy::pg_binary::ExtensionOids> {
+    use anyhow::Context;
+    let rows = client
+        .query(
+            "SELECT typname, oid FROM pg_type \
+             WHERE typname IN ('vector', 'halfvec', 'sparsevec')",
+            &[],
+        )
+        .await
+        .context("Failed to probe pg_type for extension OIDs")?;
+
+    let mut ext = crate::proxy::pg_binary::ExtensionOids::default();
+    for row in &rows {
+        let typname: &str = row.get(0);
+        let oid: u32 = row.get(1);
+        match typname {
+            "vector" => ext.vector = Some(oid),
+            "halfvec" => ext.halfvec = Some(oid),
+            "sparsevec" => ext.sparsevec = Some(oid),
+            _ => {}
+        }
+    }
+    Ok(ext)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

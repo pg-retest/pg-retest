@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::capture::CaptureEvent;
@@ -57,6 +58,12 @@ impl Drop for MetricsActiveGuard {
 }
 
 /// Run the TCP accept loop.
+///
+/// `shutdown_token` signals the listener to stop accepting new connections and
+/// propagates to every spawned per-session task so their relay loops bail out
+/// of socket reads instead of hanging forever. This is the mechanism that
+/// makes `drain_connections` timeout actually able to finalize and write the
+/// captured workload profile (SC-013).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_listener(
     listener: TcpListener,
@@ -70,6 +77,8 @@ pub async fn run_listener(
     max_connections_per_ip: u32,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
     proxy_metrics: Option<Arc<ProxyMetrics>>,
+    shutdown_token: CancellationToken,
+    extension_oids: super::pg_binary::ExtensionOids,
 ) -> Result<()> {
     let session_counter = AtomicU64::new(1);
     let addr = listener.local_addr()?;
@@ -79,7 +88,14 @@ pub async fn run_listener(
     let ip_map: IpConnectionMap = Arc::new(DashMap::new());
 
     loop {
-        let (mut client_stream, peer_addr) = listener.accept().await?;
+        let (mut client_stream, peer_addr) = tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {
+                info!("Listener stopping (shutdown signal received)");
+                return Ok(());
+            }
+            accept = listener.accept() => accept?,
+        };
 
         // Apply socket hardening (keepalive, nodelay) to client connection
         if let Err(e) = socket::configure_socket(&client_stream) {
@@ -159,6 +175,7 @@ pub async fn run_listener(
             metrics: proxy_metrics.clone(),
         };
 
+        let connection_shutdown = shutdown_token.clone();
         tokio::spawn(async move {
             handle_connection(
                 client_stream,
@@ -171,6 +188,8 @@ pub async fn run_listener(
                 implicit_capture,
                 timeouts,
                 tls_acceptor,
+                connection_shutdown,
+                extension_oids,
             )
             .await;
             // ip_guard and metrics_guard are dropped here, decrementing counters

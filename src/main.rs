@@ -497,6 +497,52 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         None
     };
 
+    // Probe the source DB for extension-type OIDs (pgvector etc.) so the
+    // Bind capture path can decode binary-format vector/halfvec/sparsevec
+    // params into SQL literals that replay will actually parse. Optional —
+    // missing --source-db or absent extension just means vector params fall
+    // back to the `<binary N bytes>` placeholder (same as pre-SC-014).
+    let extension_oids: pg_retest::proxy::pg_binary::ExtensionOids = if let Some(ref source_db) =
+        args.source_db
+    {
+        let rt_tmp = tokio::runtime::Runtime::new()?;
+        match rt_tmp.block_on(async {
+            use pg_retest::correlate::capture::discover_extension_oids;
+            use tokio_postgres::NoTls;
+            let (client, connection) = tokio_postgres::connect(source_db, NoTls).await?;
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    tracing::error!("Extension OID probe connection error: {}", e);
+                }
+            });
+            discover_extension_oids(&client).await
+        }) {
+            Ok(ext) => {
+                let found: Vec<&str> = [
+                    ("vector", ext.vector.is_some()),
+                    ("halfvec", ext.halfvec.is_some()),
+                    ("sparsevec", ext.sparsevec.is_some()),
+                ]
+                .iter()
+                .filter_map(|(n, b)| if *b { Some(*n) } else { None })
+                .collect();
+                if !found.is_empty() {
+                    info!("Discovered extension type OIDs: {}", found.join(", "));
+                }
+                ext
+            }
+            Err(e) => {
+                warn!(
+                        "Failed to probe extension OIDs: {:#}. Binary-format extension-type params will fall back to placeholder.",
+                        e
+                    );
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
+
     // Create a restore point on the source database for PITR recovery
     if let Some(ref source_db) = args.source_db {
         let rt_tmp = tokio::runtime::Runtime::new()?;
@@ -594,6 +640,7 @@ fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
         health_check_interval_secs: args.health_check_interval,
         health_check_timeout_secs: args.health_check_timeout,
         health_check_fail_threshold: args.health_check_fail_threshold,
+        extension_oids,
     };
 
     let rt = tokio::runtime::Runtime::new()?;

@@ -11,14 +11,16 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
 use tokio_rustls::TlsAcceptor;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::capture::CaptureEvent;
+use super::pg_binary::ExtensionOids;
 use super::pool::SessionPool;
 use super::protocol::{
-    self, build_query_message, extract_bind, extract_data_row, extract_error_message,
-    extract_parse, extract_query_sql, extract_row_description, format_bind_params,
-    inline_bind_params, StartupType,
+    self, build_query_message, extract_bind, extract_data_row, extract_describe_statement,
+    extract_error_message, extract_parameter_description, extract_parse, extract_query_sql,
+    extract_row_description, format_bind_params_typed_ext, inline_bind_params, StartupType,
 };
 use crate::correlate::capture::{has_returning, inject_returning, is_currval_or_lastval, TablePk};
 
@@ -189,6 +191,8 @@ pub async fn handle_connection(
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     timeouts: TimeoutConfig,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
+    shutdown_token: CancellationToken,
+    extension_oids: ExtensionOids,
 ) {
     if let Err(e) = handle_connection_inner(
         client_stream,
@@ -201,6 +205,8 @@ pub async fn handle_connection(
         implicit_capture,
         timeouts,
         tls_acceptor,
+        shutdown_token,
+        extension_oids,
     )
     .await
     {
@@ -220,6 +226,8 @@ async fn handle_connection_inner(
     implicit_capture: Option<Arc<ImplicitCaptureState>>,
     timeouts: TimeoutConfig,
     tls_acceptor: Option<Arc<TlsAcceptor>>,
+    shutdown_token: CancellationToken,
+    extension_oids: ExtensionOids,
 ) -> Result<()> {
     let max_msg_size = timeouts.max_message_size;
 
@@ -347,16 +355,29 @@ async fn handle_connection_inner(
     // Shared state for prepared statement tracking
     let stmt_cache: Arc<tokio::sync::Mutex<HashMap<String, String>>> =
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    // Per-statement parameter OIDs. Populated from the client's Parse message
+    // (if it declares types) and/or from the server's ParameterDescription
+    // response to a Describe Statement. Read during Bind to decode binary-
+    // format params into text SQL literals for capture. (SC-014)
+    let stmt_oids: Arc<tokio::sync::Mutex<HashMap<String, Vec<u32>>>> =
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    // Name of the statement most recently targeted by a client Describe('S').
+    // Set on the c2s side, read+cleared on the s2c side when ParameterDescription
+    // arrives, to correlate the server's response with the right statement name.
+    let pending_describe: Arc<tokio::sync::Mutex<Option<String>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
 
     // Client → Server relay
     let client_idle_timeout = timeouts.client_timeout;
     let server_idle_timeout = timeouts.server_timeout;
     let idle_txn_timeout = timeouts.idle_transaction_timeout;
 
-    let c2s = tokio::spawn({
+    let mut c2s = tokio::spawn({
         let capture_tx = capture_tx.clone();
         let metrics_tx = metrics_tx.clone();
         let stmt_cache = stmt_cache.clone();
+        let stmt_oids = stmt_oids.clone();
+        let pending_describe = pending_describe.clone();
         let no_capture = no_capture.clone();
         let correlate = correlate.clone();
         let implicit_capture = implicit_capture.clone();
@@ -367,6 +388,8 @@ async fn handle_connection_inner(
                 session_id,
                 capture_tx,
                 stmt_cache,
+                stmt_oids,
+                pending_describe,
                 no_capture,
                 metrics_tx,
                 correlate,
@@ -374,13 +397,16 @@ async fn handle_connection_inner(
                 client_idle_timeout,
                 idle_txn_timeout,
                 max_msg_size,
+                extension_oids,
             )
             .await
         }
     });
 
     // Server → Client relay
-    let s2c = tokio::spawn(async move {
+    let stmt_oids_s2c = stmt_oids.clone();
+    let pending_describe_s2c = pending_describe.clone();
+    let mut s2c = tokio::spawn(async move {
         relay_server_to_client(
             server_read,
             client_write,
@@ -389,23 +415,39 @@ async fn handle_connection_inner(
             no_capture,
             metrics_tx2,
             correlate,
+            stmt_oids_s2c,
+            pending_describe_s2c,
             server_idle_timeout,
             max_msg_size,
         )
         .await
     });
 
-    // Wait for either direction to finish (one side disconnected)
+    // Wait for either direction to finish, or for a shutdown signal.
+    //
+    // Without the shutdown branch, if a client refuses to close (e.g. app has an
+    // idle pgx connection in its pool), the relay tasks stay blocked on socket
+    // reads forever — the proxy's drain-timeout logs "forcing close" but nothing
+    // actually forces anything. Aborting both join handles here is what makes
+    // the session drop its `capture_tx` clone so the collector channel can close
+    // and the captured profile can be written. (SC-013)
     tokio::select! {
-        result = c2s => {
+        result = &mut c2s => {
             if let Ok(Err(e)) = result {
                 debug!("Session {session_id}: c2s error: {e}");
             }
+            s2c.abort();
         }
-        result = s2c => {
+        result = &mut s2c => {
             if let Ok(Err(e)) = result {
                 debug!("Session {session_id}: s2c error: {e}");
             }
+            c2s.abort();
+        }
+        _ = shutdown_token.cancelled() => {
+            debug!("Session {session_id}: shutdown signal, aborting relays");
+            c2s.abort();
+            s2c.abort();
         }
     }
 
@@ -577,6 +619,8 @@ async fn relay_client_to_server<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     session_id: u64,
     capture_tx: mpsc::UnboundedSender<CaptureEvent>,
     stmt_cache: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    stmt_oids: Arc<tokio::sync::Mutex<HashMap<String, Vec<u32>>>>,
+    pending_describe: Arc<tokio::sync::Mutex<Option<String>>>,
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
@@ -584,6 +628,7 @@ async fn relay_client_to_server<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     idle_timeout: Option<Duration>,
     idle_txn_timeout: Option<Duration>,
     max_message_size: u32,
+    extension_oids: ExtensionOids,
 ) -> Result<()> {
     let mut in_transaction = false;
 
@@ -677,7 +722,12 @@ async fn relay_client_to_server<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                     }
                 }
                 b'P' => {
-                    // Parse (prepared statement) — cache name→SQL mapping
+                    // Parse (prepared statement) — cache name→SQL mapping and
+                    // any declared parameter OIDs. For drivers like pgx the
+                    // declared OID list is often empty or zero-filled; the
+                    // authoritative types arrive later in the server's
+                    // ParameterDescription response (see the 't' branch in
+                    // relay_server_to_client). (SC-014)
                     if let Some(parsed) = extract_parse(&msg) {
                         // Track RETURNING for correlation
                         if let Some(ref cs) = correlate {
@@ -690,16 +740,46 @@ async fn relay_client_to_server<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                             };
                             cs.returning_queue.lock().await.push_back(has_ret);
                         }
-                        let mut cache = stmt_cache.lock().await;
-                        cache.insert(parsed.statement_name, parsed.sql);
+                        {
+                            let mut cache = stmt_cache.lock().await;
+                            cache.insert(parsed.statement_name.clone(), parsed.sql);
+                        }
+                        // Record the client's declared oids so Bind can decode
+                        // binary params even if no Describe round-trip happens.
+                        // A later ParameterDescription will overwrite this with
+                        // the server's authoritative types.
+                        if parsed.param_oids.iter().any(|&o| o != 0) {
+                            let mut oids = stmt_oids.lock().await;
+                            oids.insert(parsed.statement_name, parsed.param_oids);
+                        }
+                    }
+                }
+                b'D' => {
+                    // Describe — when it targets a statement, remember the
+                    // name so the s2c side can attach the ParameterDescription
+                    // response to the right stmt_oids entry. (SC-014)
+                    if let Some(name) = extract_describe_statement(&msg) {
+                        *pending_describe.lock().await = Some(name);
                     }
                 }
                 b'B' => {
-                    // Bind — resolve stmt name to SQL, inline params
+                    // Bind — resolve stmt name to SQL, inline params using
+                    // type-aware decoding so binary-format values (pgx and any
+                    // modern driver) are rendered as valid SQL literals rather
+                    // than the `'<binary N bytes>'` placeholder that PG would
+                    // reject on replay. (SC-014)
                     if let Some(bind) = extract_bind(&msg) {
                         let cache = stmt_cache.lock().await;
                         if let Some(sql_template) = cache.get(&bind.statement_name) {
-                            let params = format_bind_params(&bind.parameters);
+                            let oids_map = stmt_oids.lock().await;
+                            let empty_oids: Vec<u32> = Vec::new();
+                            let oids = oids_map.get(&bind.statement_name).unwrap_or(&empty_oids);
+                            let params = format_bind_params_typed_ext(
+                                &bind.parameters,
+                                &bind.param_formats,
+                                oids,
+                                &extension_oids,
+                            );
                             let sql = inline_bind_params(sql_template, &params);
                             let event = CaptureEvent::QueryStart {
                                 session_id,
@@ -753,6 +833,8 @@ async fn relay_server_to_client<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     no_capture: Arc<AtomicBool>,
     metrics_tx: Option<mpsc::UnboundedSender<CaptureEvent>>,
     correlate: Option<Arc<CorrelateState>>,
+    stmt_oids: Arc<tokio::sync::Mutex<HashMap<String, Vec<u32>>>>,
+    pending_describe: Arc<tokio::sync::Mutex<Option<String>>>,
     idle_timeout: Option<Duration>,
     max_message_size: u32,
 ) -> Result<()> {
@@ -772,6 +854,19 @@ async fn relay_server_to_client<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 
         if !no_capture.load(Ordering::Relaxed) {
             match msg.msg_type {
+                b't' => {
+                    // ParameterDescription — the server's definitive parameter
+                    // OIDs for a prepared statement. Resolve to the name the
+                    // client most recently Described and update the cache so
+                    // subsequent Binds can decode binary params. (SC-014)
+                    if let Some(oids) = extract_parameter_description(&msg) {
+                        let mut pending = pending_describe.lock().await;
+                        if let Some(name) = pending.take() {
+                            let mut map = stmt_oids.lock().await;
+                            map.insert(name, oids);
+                        }
+                    }
+                }
                 b'T' => {
                     // RowDescription — if correlation is active and front of queue is true,
                     // capture column names for RETURNING clause.

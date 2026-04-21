@@ -270,13 +270,16 @@ pub fn extract_query_sql(msg: &PgMessage) -> Option<String> {
     Some(String::from_utf8_lossy(sql).into_owned())
 }
 
-/// Parsed Parse ('P') message: statement name + SQL text.
+/// Parsed Parse ('P') message: statement name, SQL text, and the client's
+/// declared parameter OIDs (may be empty or zero-filled when the client wants
+/// the server to infer types).
 pub struct ParseMessage {
     pub statement_name: String,
     pub sql: String,
+    pub param_oids: Vec<u32>,
 }
 
-/// Extract statement name and SQL from a Parse ('P') message.
+/// Extract statement name, SQL, and parameter OIDs from a Parse ('P') message.
 /// Body: name (null-terminated) + query (null-terminated) + param count (i16) + param OIDs.
 pub fn extract_parse(msg: &PgMessage) -> Option<ParseMessage> {
     if msg.msg_type != b'P' {
@@ -288,20 +291,62 @@ pub fn extract_parse(msg: &PgMessage) -> Option<ParseMessage> {
     let rest = &body[name_end + 1..];
     let sql_end = rest.iter().position(|&b| b == 0)?;
     let sql = String::from_utf8_lossy(&rest[..sql_end]).into_owned();
+    let after_sql = &rest[sql_end + 1..];
+    let mut param_oids = Vec::new();
+    if after_sql.len() >= 2 {
+        let count = i16::from_be_bytes([after_sql[0], after_sql[1]]) as usize;
+        if after_sql.len() >= 2 + count * 4 {
+            for i in 0..count {
+                let off = 2 + i * 4;
+                param_oids.push(u32::from_be_bytes([
+                    after_sql[off],
+                    after_sql[off + 1],
+                    after_sql[off + 2],
+                    after_sql[off + 3],
+                ]));
+            }
+        }
+    }
     Some(ParseMessage {
         statement_name: name,
         sql,
+        param_oids,
     })
 }
 
-/// Parsed Bind ('B') message: portal name, statement name, parameter values.
+/// Extract the statement name from a client-side Describe ('D') message that
+/// targets a statement (first body byte is 'S'). Returns `None` for Describe
+/// Portal ('P') or malformed messages.
+///
+/// Body: kind (1 byte: 'S' or 'P') + name (null-terminated).
+pub fn extract_describe_statement(msg: &PgMessage) -> Option<String> {
+    if msg.msg_type != b'D' {
+        return None;
+    }
+    let body = msg.body();
+    if body.is_empty() || body[0] != b'S' {
+        return None;
+    }
+    let name_end = body[1..].iter().position(|&b| b == 0)?;
+    Some(String::from_utf8_lossy(&body[1..1 + name_end]).into_owned())
+}
+
+/// Parsed Bind ('B') message: portal name, statement name, parameter values,
+/// and per-parameter format codes (0 = text, 1 = binary).
+///
+/// `param_formats` is always the same length as `parameters`, expanded from
+/// the wire-format short-forms: `format_count==0` → all text (zero-filled),
+/// `format_count==1` → the single code broadcast to every param.
 pub struct BindMessage {
     pub portal_name: String,
     pub statement_name: String,
     pub parameters: Vec<Option<Vec<u8>>>,
+    pub param_formats: Vec<i16>,
 }
 
-/// Extract portal name, statement name, and parameters from a Bind ('B') message.
+/// Extract portal name, statement name, format codes, and parameters from a
+/// Bind ('B') message.
+///
 /// Body: portal (null-term) + stmt (null-term) + format_count (i16) + formats
 ///       + param_count (i16) + params (len + data each, -1 for NULL).
 pub fn extract_bind(msg: &PgMessage) -> Option<BindMessage> {
@@ -321,12 +366,20 @@ pub fn extract_bind(msg: &PgMessage) -> Option<BindMessage> {
     let statement_name = String::from_utf8_lossy(&body[pos..pos + stmt_end]).into_owned();
     pos += stmt_end + 1;
 
-    // Format codes count (i16) + skip format codes
+    // Format codes count (i16) + read format codes
     if pos + 2 > body.len() {
         return None;
     }
     let format_count = i16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
-    pos += 2 + format_count * 2;
+    pos += 2;
+    if pos + format_count * 2 > body.len() {
+        return None;
+    }
+    let mut format_codes = Vec::with_capacity(format_count);
+    for _ in 0..format_count {
+        format_codes.push(i16::from_be_bytes([body[pos], body[pos + 1]]));
+        pos += 2;
+    }
 
     // Parameter count (i16)
     if pos + 2 > body.len() {
@@ -355,11 +408,55 @@ pub fn extract_bind(msg: &PgMessage) -> Option<BindMessage> {
         }
     }
 
+    // Expand format codes per protocol rules:
+    // - 0 codes → all text (format 0) for every param
+    // - 1 code  → broadcast to every param
+    // - N codes → one per param (N must equal param_count; otherwise pad with 0)
+    let param_formats = if format_codes.is_empty() {
+        vec![0; parameters.len()]
+    } else if format_codes.len() == 1 {
+        vec![format_codes[0]; parameters.len()]
+    } else {
+        let mut expanded = format_codes;
+        expanded.resize(parameters.len(), 0);
+        expanded
+    };
+
     Some(BindMessage {
         portal_name,
         statement_name,
         parameters,
+        param_formats,
     })
+}
+
+/// Extract parameter OIDs from a ParameterDescription ('t') message sent by
+/// the server in response to a Describe Statement. Each OID is a u32.
+///
+/// Body: param_count (i16) + param_count * u32 OIDs.
+pub fn extract_parameter_description(msg: &PgMessage) -> Option<Vec<u32>> {
+    if msg.msg_type != b't' {
+        return None;
+    }
+    let body = msg.body();
+    if body.len() < 2 {
+        return None;
+    }
+    let count = i16::from_be_bytes([body[0], body[1]]) as usize;
+    if body.len() < 2 + count * 4 {
+        return None;
+    }
+    let mut oids = Vec::with_capacity(count);
+    for i in 0..count {
+        let off = 2 + i * 4;
+        oids.push(u32::from_be_bytes([
+            body[off],
+            body[off + 1],
+            body[off + 2],
+            body[off + 3],
+        ]));
+    }
+    Some(oids)
 }
 
 /// Extract the command tag from a CommandComplete ('C') message.
@@ -508,18 +605,66 @@ pub fn extract_data_row(msg: &PgMessage, num_columns: usize) -> Option<Vec<Optio
     Some(values)
 }
 
-/// Format parameter values from a Bind message as strings for capture.
-/// Text parameters are converted to strings; binary params shown as description.
-/// NULL parameters become the string "NULL".
+/// Format parameter values from a Bind message as SQL literals for capture.
+/// Text parameters are converted to quoted strings; binary params are decoded
+/// using the type OIDs and format codes when available, otherwise fall back
+/// to the `'<binary N bytes>'` placeholder. NULL parameters become `NULL`.
+///
+/// Callers that have no oid/format context (older sites, tests) can use
+/// `format_bind_params(params)` which behaves exactly like the pre-SC-014
+/// implementation — text-utf8 if possible, placeholder otherwise.
 pub fn format_bind_params(params: &[Option<Vec<u8>>]) -> Vec<String> {
+    format_bind_params_typed(params, &[], &[])
+}
+
+/// Format bind parameters with per-param format codes and type OIDs.
+///
+/// - `formats[i] == 0` → text format: bytes are UTF-8, quote-and-escape.
+/// - `formats[i] == 1` → binary format: decode via `pg_binary::binary_to_sql_literal`
+///   using `oids[i]`. If the OID is unknown or the byte length doesn't match,
+///   fall back to the `'<binary N bytes>'` placeholder.
+///
+/// Missing `formats`/`oids` entries are treated as 0/unknown respectively,
+/// which preserves legacy behavior when the caller has no context.
+pub fn format_bind_params_typed(
+    params: &[Option<Vec<u8>>],
+    formats: &[i16],
+    oids: &[u32],
+) -> Vec<String> {
+    format_bind_params_typed_ext(
+        params,
+        formats,
+        oids,
+        &super::pg_binary::ExtensionOids::default(),
+    )
+}
+
+/// Like [`format_bind_params_typed`] but also decodes extension-provided
+/// OIDs (pgvector, etc.) discovered at proxy startup.
+pub fn format_bind_params_typed_ext(
+    params: &[Option<Vec<u8>>],
+    formats: &[i16],
+    oids: &[u32],
+    ext: &super::pg_binary::ExtensionOids,
+) -> Vec<String> {
     params
         .iter()
-        .map(|p| match p {
+        .enumerate()
+        .map(|(i, p)| match p {
             None => "NULL".to_string(),
-            Some(bytes) => match std::str::from_utf8(bytes) {
-                Ok(s) => format!("'{}'", s.replace('\'', "''")),
-                Err(_) => format!("'<binary {} bytes>'", bytes.len()),
-            },
+            Some(bytes) => {
+                let fmt = formats.get(i).copied().unwrap_or(0);
+                if fmt == 0 {
+                    match std::str::from_utf8(bytes) {
+                        Ok(s) => format!("'{}'", s.replace('\'', "''")),
+                        Err(_) => format!("'<binary {} bytes>'", bytes.len()),
+                    }
+                } else {
+                    let oid = oids.get(i).copied().unwrap_or(0);
+                    super::pg_binary::binary_to_sql_literal_ext(oid, bytes, ext)
+                        .unwrap_or_else(|| format!("'<binary {} bytes>'", bytes.len()))
+                }
+            }
         })
         .collect()
 }
@@ -679,6 +824,142 @@ mod tests {
         assert_eq!(bind.parameters.len(), 2);
         assert_eq!(bind.parameters[0].as_deref(), Some(b"42".as_slice()));
         assert!(bind.parameters[1].is_none());
+        // Format codes default to all-text when format_count == 0.
+        assert_eq!(bind.param_formats, vec![0, 0]);
+    }
+
+    /// SC-014: a Bind with `format_count == 1` broadcasts the single code to
+    /// every parameter. Pgx uses this shape when all params share a format.
+    #[test]
+    fn test_extract_bind_broadcast_format_code() {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"\0");
+        body.extend_from_slice(b"s\0");
+        body.extend_from_slice(&1i16.to_be_bytes()); // 1 format code
+        body.extend_from_slice(&1i16.to_be_bytes()); // binary
+        body.extend_from_slice(&3i16.to_be_bytes()); // 3 params
+        for _ in 0..3 {
+            body.extend_from_slice(&4i32.to_be_bytes());
+            body.extend_from_slice(&0i32.to_be_bytes());
+        }
+        let msg = PgMessage {
+            msg_type: b'B',
+            payload: {
+                let len = (body.len() + 4) as i32;
+                let mut p = BytesMut::new();
+                p.put_slice(&len.to_be_bytes());
+                p.put_slice(&body);
+                p
+            },
+        };
+        let bind = extract_bind(&msg).unwrap();
+        assert_eq!(bind.param_formats, vec![1, 1, 1]);
+    }
+
+    /// SC-014: format_bind_params_typed decodes binary int4 to a text literal
+    /// instead of emitting the placeholder that the pre-fix replay path would
+    /// choke on.
+    #[test]
+    fn test_format_bind_params_typed_binary_int4() {
+        let params = vec![Some(42_i32.to_be_bytes().to_vec())];
+        let formats = vec![1_i16]; // binary
+        let oids = vec![23_u32]; // int4
+        let out = format_bind_params_typed(&params, &formats, &oids);
+        assert_eq!(out, vec!["'42'".to_string()]);
+    }
+
+    /// SC-014: when no oid is known for a binary-format param, fall back to
+    /// the placeholder (matches pre-fix behavior; replay will still fail, but
+    /// with a clear signature rather than mysteriously).
+    #[test]
+    fn test_format_bind_params_typed_unknown_oid_fallback() {
+        let params = vec![Some(vec![0xde, 0xad, 0xbe, 0xef])];
+        let formats = vec![1_i16];
+        let oids = vec![0_u32]; // unknown
+        let out = format_bind_params_typed(&params, &formats, &oids);
+        assert_eq!(out, vec!["'<binary 4 bytes>'".to_string()]);
+    }
+
+    /// SC-014: a Parse message that declares non-zero param OIDs surfaces them
+    /// via `extract_parse`, letting Bind decode binary params even without a
+    /// round-trip Describe.
+    #[test]
+    fn test_extract_parse_with_param_oids() {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"stmt1\0");
+        body.extend_from_slice(b"SELECT $1\0");
+        body.extend_from_slice(&1i16.to_be_bytes()); // 1 param
+        body.extend_from_slice(&23u32.to_be_bytes()); // int4
+        let msg = PgMessage {
+            msg_type: b'P',
+            payload: {
+                let len = (body.len() + 4) as i32;
+                let mut p = BytesMut::new();
+                p.put_slice(&len.to_be_bytes());
+                p.put_slice(&body);
+                p
+            },
+        };
+        let parsed = extract_parse(&msg).unwrap();
+        assert_eq!(parsed.statement_name, "stmt1");
+        assert_eq!(parsed.param_oids, vec![23]);
+    }
+
+    /// SC-014: extract_parameter_description parses the server's 't' response.
+    #[test]
+    fn test_extract_parameter_description() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2i16.to_be_bytes()); // 2 params
+        body.extend_from_slice(&23u32.to_be_bytes()); // int4
+        body.extend_from_slice(&2950u32.to_be_bytes()); // uuid
+        let msg = PgMessage {
+            msg_type: b't',
+            payload: {
+                let len = (body.len() + 4) as i32;
+                let mut p = BytesMut::new();
+                p.put_slice(&len.to_be_bytes());
+                p.put_slice(&body);
+                p
+            },
+        };
+        assert_eq!(extract_parameter_description(&msg).unwrap(), vec![23, 2950]);
+    }
+
+    /// SC-014: extract_describe_statement picks off the name from a client
+    /// Describe('S', name). Describe('P', ...) returns None since portals
+    /// aren't used for param-type resolution.
+    #[test]
+    fn test_extract_describe_statement() {
+        let mut body = Vec::new();
+        body.push(b'S');
+        body.extend_from_slice(b"stmt1\0");
+        let msg = PgMessage {
+            msg_type: b'D',
+            payload: {
+                let len = (body.len() + 4) as i32;
+                let mut p = BytesMut::new();
+                p.put_slice(&len.to_be_bytes());
+                p.put_slice(&body);
+                p
+            },
+        };
+        assert_eq!(extract_describe_statement(&msg).as_deref(), Some("stmt1"));
+
+        // Describe Portal → None
+        let mut body2 = Vec::new();
+        body2.push(b'P');
+        body2.extend_from_slice(b"portal1\0");
+        let msg2 = PgMessage {
+            msg_type: b'D',
+            payload: {
+                let len = (body2.len() + 4) as i32;
+                let mut p = BytesMut::new();
+                p.put_slice(&len.to_be_bytes());
+                p.put_slice(&body2);
+                p
+            },
+        };
+        assert_eq!(extract_describe_statement(&msg2), None);
     }
 
     #[test]

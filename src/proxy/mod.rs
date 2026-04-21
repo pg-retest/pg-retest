@@ -4,6 +4,7 @@ pub mod control;
 pub mod health;
 pub mod listener;
 pub mod metrics;
+pub mod pg_binary;
 pub mod pool;
 pub mod protocol;
 pub mod socket;
@@ -108,6 +109,11 @@ pub struct ProxyConfig {
     pub health_check_timeout_secs: u64,
     /// Consecutive failed probes before flipping the `backend_degraded` metric (default 3).
     pub health_check_fail_threshold: u64,
+    /// OIDs for extension types (pgvector, etc.) discovered at proxy startup.
+    /// Used by the Bind capture path to decode binary values for types whose
+    /// OIDs are assigned dynamically at `CREATE EXTENSION` time. Default is
+    /// all-None which preserves pre-extension behavior.
+    pub extension_oids: pg_binary::ExtensionOids,
 }
 
 /// Build an `ImplicitCaptureState` from the proxy config if implicit capture is enabled.
@@ -206,6 +212,9 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     let timeouts = build_timeout_config(&config);
     let tls_acceptor = config.client_tls_acceptor.map(Arc::new);
     let listener_metrics = proxy_metrics.clone();
+    let listener_shutdown = CancellationToken::new();
+    let listener_shutdown_for_task = listener_shutdown.clone();
+    let extension_oids = config.extension_oids;
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -219,6 +228,8 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
             max_conns_per_ip,
             tls_acceptor,
             Some(listener_metrics),
+            listener_shutdown_for_task,
+            extension_oids,
         )
         .await
     });
@@ -270,8 +281,13 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         }
     }
 
-    // Abort the listener to stop accepting new connections
-    listener_handle.abort();
+    // Cancel the listener token — stops accepting new connections AND tells
+    // every spawned per-session task to abort its relay loops. Without this
+    // signal, the relay tasks stay blocked on socket reads and never drop
+    // their `capture_tx` clones, leaving the collector channel open and the
+    // profile write blocked forever. (SC-013)
+    listener_shutdown.cancel();
+    let _ = listener_handle.await;
 
     // Wait for active connections to drain
     drain_connections(
@@ -397,6 +413,9 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
     let timeouts = build_timeout_config(&config);
     let tls_acceptor_persistent = config.client_tls_acceptor.map(Arc::new);
     let listener_metrics_persistent = proxy_metrics.clone();
+    let listener_shutdown = CancellationToken::new();
+    let listener_shutdown_for_task = listener_shutdown.clone();
+    let extension_oids = config.extension_oids;
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -410,6 +429,8 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
             max_conns_per_ip_persistent,
             tls_acceptor_persistent,
             Some(listener_metrics_persistent),
+            listener_shutdown_for_task,
+            extension_oids,
         )
         .await
     });
@@ -723,8 +744,10 @@ async fn run_proxy_persistent(config: ProxyConfig) -> Result<()> {
         }
     }
 
-    // Abort the listener
-    listener_handle.abort();
+    // Cancel the listener token — cascades to all spawned per-session tasks
+    // so they abort their relay loops instead of hanging on socket reads. (SC-013)
+    listener_shutdown.cancel();
+    let _ = listener_handle.await;
     forwarder_handle.abort();
 
     // Wait for active connections to drain
@@ -786,6 +809,9 @@ pub async fn run_proxy_managed(
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let tls_acceptor_managed = config.client_tls_acceptor.map(Arc::new);
+    let listener_shutdown = CancellationToken::new();
+    let listener_shutdown_for_task = listener_shutdown.clone();
+    let extension_oids = config.extension_oids;
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -799,6 +825,8 @@ pub async fn run_proxy_managed(
             max_conns_per_ip_managed,
             tls_acceptor_managed,
             None,
+            listener_shutdown_for_task,
+            extension_oids,
         )
         .await
     });
@@ -821,8 +849,10 @@ pub async fn run_proxy_managed(
         }
     }
 
-    // Abort the listener to stop accepting new connections
-    listener_handle.abort();
+    // Cancel the listener token — cascades to all spawned per-session tasks
+    // so they abort their relay loops instead of hanging on socket reads. (SC-013)
+    listener_shutdown.cancel();
+    let _ = listener_handle.await;
 
     // Wait for active connections to drain
     drain_connections(
@@ -909,6 +939,9 @@ async fn run_proxy_managed_multi(
     let implicit_capture = build_implicit_capture_state(&config);
     let timeouts = build_timeout_config(&config);
     let tls_acceptor_multi = config.client_tls_acceptor.map(Arc::new);
+    let listener_shutdown = CancellationToken::new();
+    let listener_shutdown_for_task = listener_shutdown.clone();
+    let extension_oids = config.extension_oids;
     let listener_handle = tokio::spawn(async move {
         listener::run_listener(
             listener,
@@ -922,6 +955,8 @@ async fn run_proxy_managed_multi(
             max_conns_per_ip_multi,
             tls_acceptor_multi,
             None,
+            listener_shutdown_for_task,
+            extension_oids,
         )
         .await
     });
@@ -1108,8 +1143,10 @@ async fn run_proxy_managed_multi(
         }
     }
 
-    // Abort the listener
-    listener_handle.abort();
+    // Cancel the listener token — cascades to all spawned per-session tasks
+    // so they abort their relay loops instead of hanging on socket reads. (SC-013)
+    listener_shutdown.cancel();
+    let _ = listener_handle.await;
     forwarder_handle.abort();
 
     // Wait for active connections to drain
@@ -1204,5 +1241,138 @@ mod tests {
         drain_connections(&pool, Duration::from_secs(0)).await;
         // Should return immediately (0 timeout = force close)
         assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    /// SC-013: the listener must exit its accept loop promptly when the shutdown
+    /// token fires, even while blocked on `listener.accept()` with no pending
+    /// connections. The pre-fix version could only be stopped via `abort()`,
+    /// which didn't cascade to already-spawned per-session tasks.
+    #[tokio::test]
+    async fn test_listener_exits_on_shutdown_token() {
+        use crate::proxy::capture::CaptureEvent;
+        use std::sync::atomic::AtomicBool;
+        use tokio::sync::mpsc;
+        use tokio_util::sync::CancellationToken;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let pool = Arc::new(SessionPool::new("127.0.0.1:5432".to_string(), 10, 30, 5));
+        let (capture_tx, _capture_rx) = mpsc::unbounded_channel::<CaptureEvent>();
+        let no_capture = Arc::new(AtomicBool::new(true));
+        let shutdown = CancellationToken::new();
+
+        let shutdown_for_listener = shutdown.clone();
+        let handle = tokio::spawn(async move {
+            crate::proxy::listener::run_listener(
+                listener,
+                pool,
+                capture_tx,
+                no_capture,
+                None,
+                false,
+                None,
+                TimeoutConfig::from_secs(0, 0, 30),
+                0,
+                None,
+                None,
+                shutdown_for_listener,
+                Default::default(),
+            )
+            .await
+        });
+
+        // Give the listener a moment to start accepting
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Fire the shutdown token
+        let start = Instant::now();
+        shutdown.cancel();
+
+        // Listener must exit its accept loop within a reasonable bound.
+        let result = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert!(
+            result.is_ok(),
+            "listener did not exit within 2s of shutdown token cancellation"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "listener took {:?} to exit; expected well under 500ms",
+            start.elapsed()
+        );
+    }
+
+    /// SC-013: the CLI proxy must finalize and return `Ok` (profile written)
+    /// even when the shutdown-duration timer fires while no real backend PG
+    /// is available. This exercises the full cascade: listener shutdown token
+    /// fires → listener task exits → capture channel closes → collector
+    /// returns → profile written.
+    #[tokio::test]
+    async fn test_run_proxy_finalizes_with_no_backend() {
+        // Bind a TcpListener to grab a free port, then drop it so run_proxy
+        // can bind to the same port. (Not racy for this test — we don't
+        // actually need anything to connect.)
+        let scratch = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = scratch.local_addr().unwrap().port();
+        drop(scratch);
+
+        let output_path =
+            std::env::temp_dir().join(format!("pg-retest-sc013-test-{}.wkl", std::process::id()));
+
+        let config = ProxyConfig {
+            listen_addr: format!("127.0.0.1:{}", listen_port),
+            target_addr: "127.0.0.1:1".to_string(), // unroutable; nothing should connect
+            output: Some(output_path.clone()),
+            pool_size: 10,
+            pool_timeout_secs: 5,
+            connect_timeout_secs: 1,
+            mask_values: false,
+            duration: Some(Duration::from_millis(200)),
+            enable_correlation: false,
+            id_capture_implicit: false,
+            pk_map: None,
+            sequence_snapshot: None,
+            no_stealth: false,
+            no_capture: false,
+            persistent: false,
+            control_port: None,
+            max_capture_queries: 0,
+            max_capture_bytes: 0,
+            max_capture_duration: None,
+            shared_no_capture: None,
+            listen_backlog: 1024,
+            client_timeout_secs: 0,
+            server_timeout_secs: 0,
+            auth_timeout_secs: 30,
+            server_lifetime_secs: 0,
+            server_idle_timeout_secs: 0,
+            idle_transaction_timeout_secs: 0,
+            max_message_size: 1024 * 1024,
+            max_connections_per_ip: 0,
+            shutdown_timeout_secs: 2,
+            client_tls_acceptor: None,
+            health_check_interval_secs: 0,
+            health_check_timeout_secs: 5,
+            health_check_fail_threshold: 3,
+            extension_oids: Default::default(),
+        };
+
+        let start = Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(10), run_proxy(config)).await;
+        let elapsed = start.elapsed();
+
+        // Must not hang past our outer timeout (the pre-fix version hung forever).
+        assert!(
+            result.is_ok(),
+            "run_proxy did not return within 10s — shutdown hang regression?"
+        );
+        assert!(result.unwrap().is_ok(), "run_proxy returned Err");
+        // Duration was 200ms + small drain budget; overall should finish well under 10s.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "run_proxy took {:?}; expected <5s",
+            elapsed
+        );
+
+        // Clean up the test artifact
+        let _ = std::fs::remove_file(&output_path);
     }
 }

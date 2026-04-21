@@ -92,6 +92,7 @@ async fn start_proxy(
         health_check_interval_secs: 0,
         health_check_timeout_secs: 5,
         health_check_fail_threshold: 3,
+        extension_oids: Default::default(),
     };
 
     let cancel_token = CancellationToken::new();
@@ -431,6 +432,7 @@ async fn test_proxy_no_capture_mode() {
         health_check_interval_secs: 0,
         health_check_timeout_secs: 5,
         health_check_fail_threshold: 3,
+        extension_oids: Default::default(),
     };
 
     let cancel_token = CancellationToken::new();
@@ -527,6 +529,7 @@ async fn test_proxy_duration_shutdown() {
         health_check_interval_secs: 0,
         health_check_timeout_secs: 5,
         health_check_fail_threshold: 3,
+        extension_oids: Default::default(),
     };
 
     let cancel_token = CancellationToken::new();

@@ -126,6 +126,7 @@ pub async fn start_proxy(
         health_check_interval_secs: 30,
         health_check_timeout_secs: 5,
         health_check_fail_threshold: 3,
+        extension_oids: Default::default(),
     };
 
     let listen = req.listen.clone();
