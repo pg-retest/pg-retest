@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.4] — 2026-04-22
+
+This release candidate completes the SQL parsing upgrade (shared `SqlLexer`
+plus libpg_query-backed structural analysis) and closes two rc.4 ship-blockers
+discovered during end-to-end testing against a real Go + pgx application:
+the proxy shutdown hang (SC-013) and binary bind-parameter capture failure
+(SC-014).
+
 ### Added
 
 - **libpg_query (pg_query.rs 6.1.1) dependency** for AST-backed RETURNING
@@ -49,6 +57,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Phase 2 Docker demo E2E (DC-004) running captured ON CONFLICT traffic
   through real PostgreSQL. Fixed for both AST and legacy impls in commit
   d2b06a3. Live-verified against postgres:16.
+- **Proxy graceful shutdown hang (SC-013).** The drain-timeout path
+  logged `WARN "Shutdown timeout: N connection(s) still active, forcing
+  close"` but `force_close` did not actually cancel the tokio relay
+  tasks — the process hung indefinitely whenever a pooled backend
+  connection held open a socket read, and the captured `.wkl` file was
+  never written. SIGTERM was ignored; only SIGKILL terminated the
+  process, losing the entire capture. Fixed by threading
+  `CancellationToken` through `run_listener` and `handle_connection` in
+  all four `run_proxy*` variants. The token cascades to every spawned
+  per-session task so their relay loops bail out via a new shutdown arm
+  on the final `tokio::select!` instead of blocking on socket reads.
+  Post-fix E2E against the same scenario: SIGINT → "All connections
+  drained" → profile written in ~4s vs. infinite hang before.
+- **Binary bind-parameter capture for extended-query-protocol clients
+  (SC-014).** Any driver that used PG binary format bind parameters
+  (pgx, libpq with prepared statements, asyncpg, psycopg3, JDBC) was
+  producing unusable captures: `format_bind_params` stringified non-UTF8
+  param bytes to the literal placeholder `'<binary N bytes>'`, which
+  got substituted into the captured SQL and then rejected by PG on
+  replay with `ERROR: invalid input syntax for type X: "<binary N
+  bytes>"`. First E2E against a real Go + pgx application produced
+  845,146 errors and the replay never completed; 0% functional replay.
+  The bug hid behind pgbench and simple-protocol tests for months
+  because neither uses the Bind message path. Fixed with a type-aware
+  binary decoder at capture time in a new module `src/proxy/pg_binary.rs`.
+  The proxy now preserves per-parameter format codes from the Bind
+  message and correlates type OIDs per prepared statement from two
+  sources: the client's Parse message when it declares non-zero OIDs,
+  and the server's ParameterDescription response to a client Describe
+  Statement. Decoded values substitute into the existing simple-protocol
+  replay path — no profile format bump, no replay engine changes.
+  Coverage: 24 builtin types (every integer/float width, uuid, numeric
+  with full base-10000 digit reconstruction, all temporal types, inet
+  and cidr with RFC 5952 IPv6 compression, macaddr, bit strings, bytea,
+  json, jsonb, xml, money, interval), 1-D arrays of the scalar types
+  with PG array-quoting rules, and extension types with dynamic OIDs
+  (pgvector `vector`, `halfvec` with IEEE-754 binary16 decode,
+  `sparsevec`) discovered at proxy startup by probing `pg_type`.
+  Unknown OIDs still fall back to the legacy placeholder so behavior
+  strictly improves. Post-fix E2E against an 85M-query Yonk benchmark
+  workload: 99.977% replay success rate, clean compare PASS. See
+  `docs/binary-bind-params.md` for the coverage reference and edge
+  cases.
 
 ### Changed
 
@@ -270,7 +321,8 @@ release tags. The cumulative feature work in that period included:
 For a complete commit-level log of pre-rc.2 development, see
 `git log 1a582b4~1` on the `main` branch.
 
-[Unreleased]: https://github.com/pg-retest/pg-retest/compare/v1.0.0-rc.3...HEAD
+[Unreleased]: https://github.com/pg-retest/pg-retest/compare/v1.0.0-rc.4...HEAD
+[1.0.0-rc.4]: https://github.com/pg-retest/pg-retest/releases/tag/v1.0.0-rc.4
 [1.0.0-rc.3]: https://github.com/pg-retest/pg-retest/releases/tag/v1.0.0-rc.3
 [1.0.0-rc.2]: https://github.com/pg-retest/pg-retest/releases/tag/v1.0.0-rc.2
 [1.0.0-rc.1]: https://github.com/pg-retest/pg-retest/releases/tag/v1.0.0-rc.1
