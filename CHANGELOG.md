@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `IF()`→`CASE` (polyglot's passthrough parses but fails on execution, which the
   behavioral oracle catches and the syntactic gate did not). Design/plan in
   `docs/superpowers/{specs,plans}/2026-06-15-oracle-verified-translation*`.
+- **Oracle Phase 2a — heterogeneous generators + LLM (experimental).** Candidate
+  generators are now an async `CandidateGenerator` trait, so deterministic transpilers
+  and external/nondeterministic tools share one engine. Added an **LLM generator**
+  (`src/transform/oracle/llm.rs`; reqwest → any OpenAI-compatible endpoint; opt-in via
+  `PG_RETEST_LLM_URL`). The oracle makes it safe by construction — a wrong LLM
+  translation is rejected, never trusted — proven deterministically by a "flaky
+  generator" safety test and a mock-endpoint HTTP test (no live LLM required).
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

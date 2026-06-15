@@ -313,7 +313,25 @@ the right one per query** — proven by execution, not asserted.
 clean and suite green with the feature OFF and ON. **Spec/plan:**
 `docs/superpowers/{specs,plans}/2026-06-15-oracle-verified-translation*`.
 
-**Phase 2 (next):** add the **LLM** and **sqlglot-subprocess** generators (both
-oracle-verified, so safe despite nondeterminism / a Python dep), the **live-MySQL
-differential** oracle, and **writes/DML** (table-state comparison). Richer per-cell
-normalization (float tolerance, timezones) lands when a corpus case needs it.
+**Phase 2a — heterogeneous oracle-verified generators (built, 2026-06-15).** Generators
+are now an async `CandidateGenerator` trait, so deterministic transpilers and external/
+nondeterministic tools plug into the same engine. Added the **LLM generator**
+(`src/transform/oracle/llm.rs`, reqwest → any OpenAI-compatible endpoint; env-config
+`PG_RETEST_LLM_URL`/`MODEL`/`KEY`; live providers opt-in). The headline claim is proven
+*deterministically*, no live LLM required:
+
+- **Safety proof** (`engine.rs::test_flaky_generator_is_rejected_engine_recovers`): a
+  generator that emits wrong SQL is caught by the oracle (`Divergent`) and the engine
+  recovers with the next generator — wrong output is **never trusted**. This is exactly
+  what makes a nondeterministic LLM as safe as a buggy regex rule.
+- **LLM HTTP path proven** against a mock OpenAI endpoint
+  (`llm.rs::test_llm_generator_parses_candidate_from_mock_endpoint`) and it declines
+  gracefully (not panics) when the endpoint is unreachable.
+
+19 oracle unit tests; clippy clean and suite green feature OFF/ON.
+
+**Phase 2b (next):** the **live-MySQL differential** oracle (run the original on a real
+MySQL via the cached `mysql:8.0` image — `LiveDiffOracle` impls the same `Oracle` trait,
+zero engine change — with cross-engine row normalization), the **sqlglot-subprocess**
+generator (needs `pip install sqlglot`), and **writes/DML** (table-state comparison).
+Richer per-cell normalization (float tolerance, timezones) lands when a corpus case needs it.

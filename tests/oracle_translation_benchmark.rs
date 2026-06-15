@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 
 use pg_retest::transform::mysql_to_pg::mysql_to_pg_pipeline;
 use pg_retest::transform::oracle::corpus::Corpus;
-use pg_retest::transform::oracle::engine::{translate_verified, Generator};
+use pg_retest::transform::oracle::engine::{
+    translate_verified, CandidateGenerator, PipelineGenerator,
+};
 use pg_retest::transform::oracle::golden::{conn_str, GoldenOracle};
 use pg_retest::transform::polyglot::mysql_to_pg_polyglot_pipeline;
 
@@ -32,15 +34,9 @@ async fn oracle_verified_translation_benchmark() {
         .expect("seed should load");
 
     let corpus = Corpus::from_toml(include_str!("fixtures/oracle/corpus.toml")).unwrap();
-    let generators = vec![
-        Generator {
-            name: "polyglot",
-            pipeline: mysql_to_pg_polyglot_pipeline(),
-        },
-        Generator {
-            name: "regex",
-            pipeline: mysql_to_pg_pipeline(),
-        },
+    let generators: Vec<Box<dyn CandidateGenerator>> = vec![
+        PipelineGenerator::boxed("polyglot", mysql_to_pg_polyglot_pipeline()),
+        PipelineGenerator::boxed("regex", mysql_to_pg_pipeline()),
     ];
 
     let mut wins: BTreeMap<&str, usize> = BTreeMap::new();
