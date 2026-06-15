@@ -163,15 +163,17 @@ oracle-replay → replay)**, the `oracle-replay` command, and duplicate sessions
 # ================ RESULTS:  9 passed, 0 failed ================
 ```
 
-**Oracle source.** pg-retest never connects to Oracle — the DBA enables SQL Trace
-(event 10046), collects the `.trc` file, and uploads it. `--source-type oracle-trace`
-parses it into a workload (`source_dialect = Oracle`); top-level statements only
-(recursive data-dictionary SQL is filtered). `oracle-replay` is dialect-aware: an Oracle
-workload is translated by sqlglot (`read='oracle'`), and anything sqlglot can't faithfully
-translate (e.g. `ROWNUM`) is behaviorally rejected by `--verify live`, never shipped.
-**Bind variables are substituted** from the trace's `BINDS` sections — `WHERE id = :1`
-with `value=42` becomes `WHERE id = 42` (numbers pass through; strings become quoted
-literals) — so bind-heavy OLTP traces replay faithfully.
+**Oracle sources (upload — pg-retest never connects to Oracle).** Two capture types, by
+how much the DBA can produce:
+
+| `--source-type` | Upload | Fidelity |
+|---|---|---|
+| `oracle-trace` | a SQL Trace (event 10046) `.trc` file | **High** — ordered, per-session, timed, with **bind values** (the `BINDS` sections are substituted: `WHERE id = :1` + `value=42` → `WHERE id = 42`). Best for OLTP replay. Top-level statements only; recursive dictionary SQL filtered. |
+| `oracle-awr` | a CSV from `V$SQL` / AWR / `DBA_HIST_SQLTEXT` (one query → export) | **Summary** — distinct SQL shapes + counts, easiest to produce. No bind *values* (Oracle shares cursors via binds), so parameterized SQL skips on replay; literal/reporting SQL replays. Needs a `sql_text` column; optional `executions`/`elapsed_us`. |
+
+`oracle-replay` is dialect-aware for both: an Oracle workload is translated by sqlglot
+(`read='oracle'`), and anything sqlglot can't faithfully translate (e.g. `ROWNUM`) is
+behaviorally rejected by `--verify live`, never shipped.
 
 ```bash
 pg-retest capture --source-type oracle-trace --source-log orcl_ora_12345.trc --output ora.wkl

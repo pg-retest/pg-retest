@@ -83,6 +83,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so bind-heavy OLTP traces replay faithfully. Proven in the e2e (scenario D): a bound
   `UPDATE price = NVL(:1,0)+7` with `:1=100` lands as `107` on the target PG. Heuristic
   (`:\w+`); a `:NN` inside a string literal could be misread, and the oracle gates results.
+- **Oracle Phase 2i — AWR/`V$SQL` extract capture.** New `--source-type oracle-awr`
+  (`capture::oracle_awr`) parses an uploaded CSV from `V$SQL`/AWR/`DBA_HIST_SQLTEXT`
+  (a `sql_text` column + optional `executions`/`elapsed_us`) — the easiest Oracle source for
+  a DBA to produce (one query → export). Proven in the e2e (scenario G; 11 passed, 0 failed).
+  Honest tradeoff: a summary (distinct SQL shapes, no bind values), so parameterized SQL
+  skips on replay; use `oracle-trace` for faithful OLTP. Five capture sources now feed one
+  replay engine (pg-csv, mysql-slow, rds, oracle-trace, oracle-awr).
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

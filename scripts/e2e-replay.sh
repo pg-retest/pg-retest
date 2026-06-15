@@ -138,5 +138,18 @@ else
 fi
 echo
 
+# --- G: Oracle AWR / V$SQL extract → PG ------------------------------------------------
+echo "[G] Oracle AWR/V\$SQL extract → PG (CSV upload → oracle-replay → replay)"
+sql_tgt "TRUNCATE events; UPDATE products SET price=100 WHERE id=1;" >/dev/null
+$BIN capture --source-type oracle-awr --source-log tests/fixtures/oracle_awr.csv --source-host orcl --output "$TMP/G.wkl" >/dev/null 2>&1
+if PG_RETEST_SQLGLOT_PYTHON="$SQLGLOT_PY" $BIN oracle-replay --input "$TMP/G.wkl" --output "$TMP/G_pg.wkl" --verify syntactic >/dev/null 2>&1 && [ -f "$TMP/G_pg.wkl" ]; then
+  $BIN replay --workload "$TMP/G_pg.wkl" --target "$TGT" --output "$TMP/G_res.wkl" >/dev/null 2>&1
+  check "G AWR INSERT replayed" "$(sql_tgt "SELECT note FROM events")" "awr_origin"
+  check "G AWR UPDATE replayed" "$(sql_tgt 'SELECT price FROM products WHERE id=1')" "103"
+else
+  echo "  SKIP: needs sqlglot (SQLGLOT_PY)"
+fi
+echo
+
 echo "================ RESULTS:  $PASS passed, $FAIL failed ================"
 [ "$FAIL" -eq 0 ]

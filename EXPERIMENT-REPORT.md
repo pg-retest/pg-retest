@@ -453,6 +453,16 @@ target PG — bind substitution + Oracle→PG translation + replay, end to end. 
 (`:\w+`, not lexer-aware) so a `:NN` inside a string literal could be misread; the oracle
 gates the result. So bind-heavy OLTP Oracle traces now replay faithfully.
 
-**Phase 2i (next):** richer per-cell normalization (float/decimal tolerance, timezones),
-transaction-aware skipping (FR-XFORM-8), an `ON CONFLICT` upsert via the LLM generator,
-and an AWR/`V$SQL` extract capture source (the easy-to-produce Oracle alternative).
+**Phase 2i — Oracle AWR/`V$SQL` extract capture (built, 2026-06-15).** A second, easiest
+Oracle source: `--source-type oracle-awr` (`capture::oracle_awr`) parses an uploaded CSV
+from `V$SQL` / AWR / `DBA_HIST_SQLTEXT` (a `sql_text` column + optional `executions` /
+`elapsed_us`). Proven in `scripts/e2e-replay.sh` scenario G (now **11 passed, 0 failed**):
+AWR CSV → capture → oracle-replay → replay, with the INSERT/UPDATE landing on the target.
+Honest tradeoff: AWR is a *summary* — distinct SQL shapes, no bind values — so parameterized
+SQL skips on replay; literal/reporting SQL replays. Use `oracle-trace` (with binds) for
+faithful OLTP. There are now **five capture sources** (pg-csv, mysql-slow, rds,
+oracle-trace, oracle-awr) feeding one replay engine.
+
+**Phase 2j (next):** date/NULL/RAW bind types, lexer-based bind detection, richer per-cell
+normalization (float/decimal/timezone), transaction-aware skipping (FR-XFORM-8), and an
+`ON CONFLICT` upsert via the LLM generator.

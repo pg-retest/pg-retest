@@ -196,8 +196,15 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
             })?;
             OracleTraceCapture.capture_from_file(source_log, &args.source_host)?
         }
+        "oracle-awr" => {
+            use pg_retest::capture::oracle_awr::OracleAwrCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for oracle-awr capture (a CSV extract)")
+            })?;
+            OracleAwrCapture.capture_from_file(source_log, &args.source_host)?
+        }
         other => anyhow::bail!(
-            "Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds, oracle-trace"
+            "Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds, oracle-trace, oracle-awr"
         ),
     };
 

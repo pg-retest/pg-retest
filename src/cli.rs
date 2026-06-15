@@ -116,7 +116,7 @@ pub struct CaptureArgs {
     #[arg(long)]
     pub source_log: Option<PathBuf>,
 
-    /// Source log type: pg-csv (default), mysql-slow, rds, oracle-trace
+    /// Source log type: pg-csv (default), mysql-slow, rds, oracle-trace, oracle-awr
     #[arg(long, default_value = "pg-csv")]
     pub source_type: String,
 
