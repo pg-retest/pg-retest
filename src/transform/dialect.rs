@@ -29,7 +29,10 @@ mod tests {
     #[test]
     fn test_dialect_mapping_targets_postgresql_not_postgres() {
         // The load-bearing gotcha: the Rust enum variant is `PostgreSQL`.
-        assert_eq!(to_polyglot(SourceDialect::Postgres), DialectType::PostgreSQL);
+        assert_eq!(
+            to_polyglot(SourceDialect::Postgres),
+            DialectType::PostgreSQL
+        );
         assert_eq!(to_polyglot(SourceDialect::MySql), DialectType::MySQL);
         assert_eq!(to_polyglot(SourceDialect::SqlServer), DialectType::TSQL);
         assert_eq!(to_polyglot(SourceDialect::Other), DialectType::Generic);

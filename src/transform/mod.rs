@@ -10,6 +10,14 @@ pub mod dialect;
 #[cfg(feature = "polyglot-transform")]
 pub mod polyglot;
 
+/// True if `sql` is accepted by PostgreSQL's own parser (libpg_query via the
+/// `pg_query` crate). Used by the polyglot validity gate and the benefit harness to
+/// classify transpiler output. Proves *syntactic* PG validity only — never
+/// behavioral equivalence.
+pub fn is_valid_postgres(sql: &str) -> bool {
+    pg_query::parse(sql).is_ok()
+}
+
 /// Result of transforming a single SQL statement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransformResult {

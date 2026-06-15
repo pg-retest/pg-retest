@@ -22,7 +22,7 @@
 
 use polyglot_sql::{Dialect, DialectType, Error as PgError, TranspileOptions};
 
-use super::{SqlTransformer, TransformPipeline, TransformResult};
+use super::{is_valid_postgres, SqlTransformer, TransformPipeline, TransformResult};
 
 /// Transpiles one SQL statement from `source` dialect to `target` (always
 /// PostgreSQL for pg-retest), flag-and-skipping anything it cannot faithfully and
@@ -66,7 +66,7 @@ impl SqlTransformer for PolyglotTransformer {
             // Exactly one statement: gate it through PostgreSQL's own parser.
             Ok(stmts) if stmts.len() == 1 => {
                 let out = stmts.into_iter().next().unwrap();
-                if pg_query::parse(&out).is_ok() {
+                if is_valid_postgres(&out) {
                     TransformResult::Transformed(out)
                 } else {
                     // polyglot emitted PG-invalid output without raising (see module
@@ -90,11 +90,11 @@ impl SqlTransformer for PolyglotTransformer {
             Err(PgError::Unsupported { feature, dialect }) => TransformResult::Skipped {
                 reason: format!("polyglot: `{feature}` unsupported in {dialect}"),
             },
-            Err(e @ (PgError::Parse { .. } | PgError::Syntax { .. } | PgError::Tokenize { .. })) => {
-                TransformResult::Skipped {
-                    reason: format!("polyglot: unparseable source SQL: {e}"),
-                }
-            }
+            Err(
+                e @ (PgError::Parse { .. } | PgError::Syntax { .. } | PgError::Tokenize { .. }),
+            ) => TransformResult::Skipped {
+                reason: format!("polyglot: unparseable source SQL: {e}"),
+            },
             Err(e) => TransformResult::Skipped {
                 reason: format!("polyglot: {e}"),
             },
@@ -165,7 +165,10 @@ mod tests {
         // Real polyglot output: EXTRACT(epoch FROM CURRENT_TIMESTAMP) — valid PG.
         let out = transformed(mysql().transform("SELECT UNIX_TIMESTAMP()"));
         assert!(out.to_uppercase().contains("EXTRACT"), "got: {out}");
-        assert!(pg_query::parse(&out).is_ok(), "output must be valid PG: {out}");
+        assert!(
+            pg_query::parse(&out).is_ok(),
+            "output must be valid PG: {out}"
+        );
     }
 
     // --- THE HEADLINE: AST awareness regex cannot match (FR-XFORM-14) ---
