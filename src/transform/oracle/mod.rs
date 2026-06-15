@@ -20,6 +20,7 @@ pub mod golden;
 pub mod live;
 pub mod llm;
 pub mod normalize;
+pub mod replay;
 pub mod sqlglot;
 
 use async_trait::async_trait;
@@ -39,6 +40,25 @@ pub enum Verdict {
 #[async_trait]
 pub trait Oracle {
     async fn verify(&self, candidate_sql: &str, reference_sql: &str) -> Verdict;
+}
+
+/// The weakest oracle: accept any candidate PostgreSQL's own parser accepts (the
+/// transpiler's `pg_query` gate, lifted to the engine). Needs no database, so it lets the
+/// multi-pass engine run anywhere — but it proves only *syntactic* validity, never
+/// behavior. Use a `GoldenOracle`/`LiveDiffOracle` for a real migration decision.
+pub struct SyntacticOracle;
+
+#[async_trait]
+impl Oracle for SyntacticOracle {
+    async fn verify(&self, candidate_sql: &str, _reference_sql: &str) -> Verdict {
+        if super::is_valid_postgres(candidate_sql) {
+            Verdict::Equivalent
+        } else {
+            Verdict::Error {
+                detail: "not valid PostgreSQL".into(),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -84,6 +84,30 @@ pub enum Commands {
 
     /// Compile a workload for deterministic replay (strip response_values, validate IDs)
     Compile(CompileArgs),
+
+    /// Translate a MySQL workload to PostgreSQL, oracle-verified (experimental)
+    #[cfg(feature = "polyglot-transform")]
+    OracleReplay(OracleReplayArgs),
+}
+
+/// Arguments for the experimental `oracle-replay` command. Translates a captured MySQL
+/// workload to PostgreSQL via the multi-pass verified-search engine.
+#[cfg(feature = "polyglot-transform")]
+#[derive(clap::Args)]
+pub struct OracleReplayArgs {
+    /// Input MySQL workload profile (.wkl)
+    #[arg(short, long)]
+    pub input: PathBuf,
+
+    /// Output translated PostgreSQL workload profile (.wkl)
+    #[arg(short, long, default_value = "translated.wkl")]
+    pub output: PathBuf,
+
+    /// Verification: `syntactic` (PostgreSQL parser, no database) or `live` (execute the
+    /// original on a real MySQL and the candidate on PostgreSQL, diff results — needs
+    /// PG_RETEST_ORACLE_URL + PG_RETEST_MYSQL_CMD).
+    #[arg(long, default_value = "syntactic")]
+    pub verify: String,
 }
 
 #[derive(clap::Args)]

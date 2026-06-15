@@ -174,13 +174,34 @@ cargo run --features polyglot-transform -- capture \
 optional generators (sqlglot/LLM). Seed the target and reference with **equivalent** data
 (point-in-time restore for a true 1:1 replay; for validation, an equivalent schema+data).
 
-**Step 3 — Translate, oracle-verified.** For each captured statement, the engine
-(`transform::oracle::engine::translate_verified`) runs the generators, the oracle verifies
-each candidate against the reference, and the first `Equivalent` wins; the rest are
-recorded; unverifiable statements are skipped and reported. Today this runs at the library
-/ benchmark level (see the tests in §4 for the exact call shape); the deep benchmark is a
-working template for translating a corpus this way. A single `pg-retest oracle-replay`
-subcommand that threads a whole `.wkl` through this is the natural next integration.
+**Step 3 — Translate, oracle-verified** (the `oracle-replay` command). For each captured
+statement, the multi-pass engine runs the generators, the oracle verifies each candidate,
+and the first accepted translation wins; unverifiable statements are dropped and reported.
+`original_sql` (the source-native MySQL) is retained on every translated statement, and the
+output's `source_dialect` becomes `Postgres`:
+
+```bash
+# syntactic acceptance (PostgreSQL parser; no database needed):
+cargo run --features polyglot-transform -- oracle-replay \
+  --input workload.wkl --output translated.wkl --verify syntactic
+
+# behavioral acceptance (execute original on real MySQL, candidate on PG, diff):
+PG_RETEST_ORACLE_URL="host=... dbname=..." \
+PG_RETEST_MYSQL_CMD="docker exec <mysql> mysql -uroot -proot -N --batch --raw <db>" \
+cargo run --features polyglot-transform -- oracle-replay \
+  --input workload.wkl --output translated.wkl --verify live
+```
+
+It prints an `Oracle-Replay Report` (statements / translated / skipped, counts per winning
+generator, and the skipped statements with reasons). `--verify syntactic` proves only that
+PostgreSQL *parses* each translation; use `--verify live` for a migration decision (it
+requires a MySQL reference and a PG target seeded to match the captured schema/data).
+sqlglot and the LLM are added to the cascade automatically when `PG_RETEST_SQLGLOT_PYTHON` /
+`PG_RETEST_LLM_URL` are set.
+
+> **Note:** skipped statements are dropped individually; transaction-aware skipping
+> (dropping a whole transaction when any of its statements is unverifiable — FR-XFORM-8) is
+> a follow-on. Review the report before replaying a transactional workload.
 
 **Step 4 — Replay the verified translations on PostgreSQL** (existing engine):
 

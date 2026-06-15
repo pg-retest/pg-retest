@@ -38,7 +38,103 @@ fn main() -> Result<()> {
         Commands::Tune(args) => cmd_tune(args),
         Commands::ProxyCtl(args) => cmd_proxy_ctl(args),
         Commands::Compile(args) => cmd_compile(args),
+        #[cfg(feature = "polyglot-transform")]
+        Commands::OracleReplay(args) => cmd_oracle_replay(args),
     }
+}
+
+/// Translate a MySQL workload to PostgreSQL via the multi-pass, oracle-verified engine.
+#[cfg(feature = "polyglot-transform")]
+fn cmd_oracle_replay(args: pg_retest::cli::OracleReplayArgs) -> Result<()> {
+    use anyhow::anyhow;
+    use pg_retest::profile::io;
+    use pg_retest::transform::mysql_to_pg::mysql_to_pg_pipeline;
+    use pg_retest::transform::oracle::engine::{CandidateGenerator, PipelineGenerator};
+    use pg_retest::transform::oracle::golden::{conn_str, GoldenOracle};
+    use pg_retest::transform::oracle::live::LiveDiffOracle;
+    use pg_retest::transform::oracle::llm::LlmGenerator;
+    use pg_retest::transform::oracle::replay::translate_profile;
+    use pg_retest::transform::oracle::sqlglot::SqlglotGenerator;
+    use pg_retest::transform::oracle::SyntacticOracle;
+    use pg_retest::transform::polyglot::mysql_to_pg_polyglot_pipeline;
+
+    let profile = io::read_profile(&args.input)?;
+    info!(
+        "oracle-replay: {} ({} sessions), verify={}",
+        args.input.display(),
+        profile.sessions.len(),
+        args.verify
+    );
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let (translated, report) = rt.block_on(async {
+        // Generator fleet: deterministic always; sqlglot + LLM if configured.
+        let mut generators: Vec<Box<dyn CandidateGenerator>> = vec![
+            PipelineGenerator::boxed("regex", mysql_to_pg_pipeline()),
+            PipelineGenerator::boxed("polyglot", mysql_to_pg_polyglot_pipeline()),
+        ];
+        if SqlglotGenerator::from_env().available().await {
+            generators.push(Box::new(SqlglotGenerator::from_env()));
+        }
+        if let Some(llm) = LlmGenerator::from_env() {
+            generators.push(Box::new(llm));
+        }
+        info!(
+            "generators: {:?}",
+            generators.iter().map(|g| g.name()).collect::<Vec<_>>()
+        );
+
+        match args.verify.as_str() {
+            "live" => {
+                let argv = LiveDiffOracle::mysql_argv_from_env()
+                    .ok_or_else(|| anyhow!("--verify live needs PG_RETEST_MYSQL_CMD"))?;
+                let oracle = LiveDiffOracle::connect(&conn_str(), argv)
+                    .await
+                    .map_err(|e| anyhow!("live oracle connect: {e}"))?;
+                Ok::<_, anyhow::Error>(translate_profile(&profile, &generators, &oracle).await)
+            }
+            "golden" => {
+                // GoldenOracle here treats the original MySQL as the "reference" — only
+                // meaningful when the target PG is seeded to match. Mostly for testing.
+                let oracle = GoldenOracle::connect(&conn_str())
+                    .await
+                    .map_err(|e| anyhow!("golden oracle connect: {e}"))?;
+                Ok(translate_profile(&profile, &generators, &oracle).await)
+            }
+            _ => Ok(translate_profile(&profile, &generators, &SyntacticOracle).await),
+        }
+    })?;
+
+    io::write_profile(&args.output, &translated)?;
+
+    println!();
+    println!("  Oracle-Replay Report");
+    println!("  ====================");
+    println!("  Statements:   {}", report.total);
+    println!("  Translated:   {}", report.translated);
+    println!("  Skipped:      {}", report.skipped);
+    if !report.by_generator.is_empty() {
+        println!("  By generator:");
+        for (g, n) in &report.by_generator {
+            println!("    {g:<10} {n}");
+        }
+    }
+    if !report.skips.is_empty() {
+        println!("  Skipped statements (first 10):");
+        for (sql, reason) in report.skips.iter().take(10) {
+            println!("    - {sql}");
+            println!("      {reason}");
+        }
+    }
+    println!(
+        "  Wrote {} ({} statements)",
+        args.output.display(),
+        report.translated
+    );
+    if matches!(args.verify.as_str(), "syntactic") {
+        warn!("verify=syntactic proves PostgreSQL parses each translation, NOT behavior. Use --verify live (PG + MySQL) for a migration decision.");
+    }
+    Ok(())
 }
 
 fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {

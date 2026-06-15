@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **`docs/oracle-verified-translation.md`**: how to enable the feature, every environment
   variable, the PostgreSQL/MySQL/sqlglot/LLM setup, running each benchmark, and the
   capture→translate→replay→compare workflow.
+- **Oracle Phase 2f — `oracle-replay` CLI command (experimental).** New feature-gated
+  subcommand that translates a captured MySQL `.wkl` to PostgreSQL through the multi-pass
+  verified-search engine: `pg-retest oracle-replay --input w.wkl --output t.wkl --verify
+  syntactic|live`. Retains `original_sql`, sets output `source_dialect = Postgres`, drops
+  unverifiable statements, prints an Oracle-Replay Report (per-winning-generator counts +
+  skip reasons); sqlglot/LLM join the cascade when configured. Library core
+  `transform::oracle::replay::translate_profile` (unit-tested, no DB); `SyntacticOracle`
+  added for DB-free syntactic acceptance. Default build unaffected.
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

@@ -410,7 +410,26 @@ variable, the container/sqlglot/LLM setup, running each benchmark, and the
 capture→translate→replay→compare workflow — is in
 **[`docs/oracle-verified-translation.md`](docs/oracle-verified-translation.md)**.
 
-**Phase 2f (next):** richer per-cell normalization (float/decimal tolerance, timezones), an
-`ON CONFLICT` upsert via the LLM generator (which the writes oracle can now verify), a
-single `pg-retest oracle-replay` CLI subcommand threading a whole `.wkl` through the engine,
-and multi-dialect sources (Oracle, T-SQL → PG "for free" through the same seam).
+**Phase 2f — `oracle-replay` CLI command (built, 2026-06-15).** The proven library
+pipeline is now a single subcommand. `src/transform/oracle/replay.rs::translate_profile`
+runs every statement of a captured `.wkl` through the verified-search engine; the
+`pg-retest oracle-replay` command (feature-gated) wires it to file I/O and an oracle
+selector:
+
+```bash
+pg-retest oracle-replay --input workload.wkl --output translated.wkl --verify syntactic
+# or --verify live  (PG_RETEST_ORACLE_URL + PG_RETEST_MYSQL_CMD)  for behavioral acceptance
+```
+
+It retains `original_sql` on every translated statement, sets the output's `source_dialect`
+to `Postgres`, drops the unverifiable, and prints an `Oracle-Replay Report` (translated /
+skipped, per-winning-generator counts, skip reasons). sqlglot/LLM join the cascade
+automatically when configured. Proven end-to-end (capture → `oracle-replay` → `inspect`):
+a 7-statement MySQL capture translated to `mysql_slow_log+oracle-translated`, and
+`--verify live` without a MySQL configured fails fast with a clear message. The default
+build is unaffected (the whole command is `#[cfg(feature = "polyglot-transform")]`).
+
+**Phase 2g (next):** richer per-cell normalization (float/decimal tolerance, timezones),
+transaction-aware skipping (FR-XFORM-8), an `ON CONFLICT` upsert via the LLM generator
+(which the writes oracle can verify), and multi-dialect sources (Oracle, T-SQL → PG through
+the same seam).
