@@ -9,6 +9,9 @@ pub mod planner;
 pub mod dialect;
 #[cfg(feature = "polyglot-transform")]
 pub mod polyglot;
+// Behavioral translation oracle (verified-search). Spec 2026-06-15.
+#[cfg(feature = "polyglot-transform")]
+pub mod oracle;
 
 /// True if `sql` is accepted by PostgreSQL's own parser (libpg_query via the
 /// `pg_query` crate). Used by the polyglot validity gate and the benefit harness to

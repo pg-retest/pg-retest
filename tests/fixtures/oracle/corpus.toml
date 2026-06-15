@@ -1,0 +1,33 @@
+# Golden corpus: MySQL query + author-verified correct PostgreSQL translation.
+# The oracle runs `correct_pg_sql` live on the seeded PG to get truth, then checks each
+# candidate translation against it. Queries are deterministic on tests/fixtures/oracle/seed.sql.
+
+[[case]]
+id = "ifnull_coalesce"
+mysql_sql = "SELECT IFNULL(name, 'none') FROM oracle_users ORDER BY id"
+correct_pg_sql = "SELECT COALESCE(name, 'none') FROM oracle_users ORDER BY id"
+note = "IFNULL->COALESCE; both engines should produce an equivalent result"
+
+[[case]]
+id = "backticks"
+mysql_sql = "SELECT `id`, `name` FROM `oracle_users` ORDER BY id"
+correct_pg_sql = "SELECT id, name FROM oracle_users ORDER BY id"
+note = "backtick identifiers -> double-quoted (equivalent to bare lowercase idents)"
+
+[[case]]
+id = "limit_offset"
+mysql_sql = "SELECT id FROM oracle_users ORDER BY id LIMIT 1, 2"
+correct_pg_sql = "SELECT id FROM oracle_users ORDER BY id LIMIT 2 OFFSET 1"
+note = "LIMIT offset,count -> LIMIT/OFFSET"
+
+[[case]]
+id = "string_literal_if"
+mysql_sql = "SELECT 'IF(x,1,0)' AS lit"
+correct_pg_sql = "SELECT 'IF(x,1,0)' AS lit"
+note = "HEADLINE: regex mangles the string literal (oracle: Divergent); polyglot preserves it (wins)"
+
+[[case]]
+id = "if_function"
+mysql_sql = "SELECT IF(active = 1, 'yes', 'no') AS s FROM oracle_users ORDER BY id"
+correct_pg_sql = "SELECT CASE WHEN active = 1 THEN 'yes' ELSE 'no' END AS s FROM oracle_users ORDER BY id"
+note = "regex rewrites IF()->CASE (wins); polyglot passes IF() through, which the SYNTACTIC gate allowed but PG rejects at execution (oracle: Error)"
