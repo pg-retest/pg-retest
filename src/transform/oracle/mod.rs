@@ -20,6 +20,7 @@ pub mod golden;
 pub mod live;
 pub mod llm;
 pub mod normalize;
+pub mod sqlglot;
 
 use async_trait::async_trait;
 

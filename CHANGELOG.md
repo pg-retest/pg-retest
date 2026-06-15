@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`tests/oracle_live_mysql_test.rs`): all corpus translations behaviorally Equivalent to
   their MySQL originals across the two engines; wrong candidate caught; the multi-pass
   engine picks the right engine per query, verified by execution on both real engines.
+- **Oracle Phase 2c — sqlglot generator (experimental).** `SqlglotGenerator`
+  (`src/transform/oracle/sqlglot.rs`) invokes the mature Python `sqlglot` transpiler as a
+  subprocess (no Rust binding; Python via `PG_RETEST_SQLGLOT_PYTHON`, declines gracefully
+  if unavailable). More complete than the 0.5.4 Rust port — translates MySQL `IF()`→`CASE`
+  where polyglot passes it through. Proven on live PG (`tests/oracle_sqlglot_test.rs`,
+  sqlglot 30.11.0): in the `[polyglot, sqlglot]` cascade, polyglot's `IF()` passthrough is
+  rejected by the oracle on execution and sqlglot wins — added coverage, no engine change.
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

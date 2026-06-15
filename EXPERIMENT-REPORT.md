@@ -354,6 +354,24 @@ refereed by the *live* oracle — picked the same engine per query as the golden
 (polyglot the string-literal case, regex `IF()`→`CASE`), now confirmed by **execution on
 real MySQL vs real PostgreSQL**.
 
-**Phase 2c (next):** the **sqlglot-subprocess** generator (needs `pip install sqlglot`),
-**writes/DML** (table-state comparison, not result-set), richer per-cell normalization
-(float tolerance, timezones, decimal scale), and a larger cross-engine corpus.
+**Phase 2c — sqlglot generator (built, 2026-06-15).** A genuine third tool:
+`src/transform/oracle/sqlglot.rs` invokes the mature Python `sqlglot` transpiler as a
+subprocess (no Rust binding — same external-tool pattern; Python configured via
+`PG_RETEST_SQLGLOT_PYTHON`, declines gracefully if `import sqlglot` fails). sqlglot is
+*more complete* than the 0.5.4 Rust port — it translates MySQL `IF(c,a,b)` →
+`CASE WHEN …`, exactly the case polyglot passes through and PG rejects at execution.
+
+Proven on live PG (`tests/oracle_sqlglot_test.rs`, sqlglot 30.11.0 via a uv venv):
+
+```
+sqlglot won `if_function` (polyglot declined: IF() fails on PG execution).
+```
+
+In the cascade `[polyglot, sqlglot]`, polyglot's `IF()` passthrough is rejected by the
+oracle (execution error) and **sqlglot wins** — added coverage, picked up automatically
+by verified search, no engine change.
+
+**Phase 2d (next):** **writes/DML** (a different verification model — compare resulting
+*table state*, not result sets — so `INSERT … ON DUPLICATE KEY UPDATE` and friends can be
+verified), richer per-cell normalization (float tolerance, timezones, decimal scale), and
+a larger cross-engine corpus / multi-dialect (Oracle, T-SQL) sources.
