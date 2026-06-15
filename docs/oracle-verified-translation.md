@@ -154,13 +154,28 @@ cargo test --features polyglot-transform --test oracle_deep_benchmark -- --nocap
 `scripts/e2e-replay.sh` spins up throwaway PostgreSQL + MySQL containers, drives real
 `pg-retest` commands, and validates replay by observing target-DB state changes — then
 tears everything down. It covers: PG→PG (CSV capture), PG→PG (live proxy capture),
-MySQL→PG (mysql-slow capture + transform), the `oracle-replay` command, and duplicate
-sessions (`replay --scale 3`). It also documents that Oracle→PG is not an integrated path
-(no Oracle capture source; the generators are MySQL→PG).
+MySQL→PG (mysql-slow capture + transform), **Oracle→PG (SQL Trace 10046 capture →
+oracle-replay → replay)**, the `oracle-replay` command, and duplicate sessions
+(`replay --scale 3`).
 
 ```bash
 ./scripts/e2e-replay.sh
-# ================ RESULTS:  7 passed, 0 failed ================
+# ================ RESULTS:  9 passed, 0 failed ================
+```
+
+**Oracle source.** pg-retest never connects to Oracle — the DBA enables SQL Trace
+(event 10046), collects the `.trc` file, and uploads it. `--source-type oracle-trace`
+parses it into a workload (`source_dialect = Oracle`); top-level statements only
+(recursive data-dictionary SQL is filtered). `oracle-replay` is dialect-aware: an Oracle
+workload is translated by sqlglot (`read='oracle'`), and anything sqlglot can't faithfully
+translate (e.g. `ROWNUM`) is behaviorally rejected by `--verify live`, never shipped.
+Bind-value substitution from `BINDS` sections is a follow-on.
+
+```bash
+pg-retest capture --source-type oracle-trace --source-log orcl_ora_12345.trc --output ora.wkl
+PG_RETEST_SQLGLOT_PYTHON=/path/to/venv/bin/python \
+  pg-retest oracle-replay --input ora.wkl --output ora_pg.wkl --verify syntactic
+pg-retest replay --workload ora_pg.wkl --target "host=… dbname=…"
 ```
 
 > The script builds with `--features polyglot-transform` because `oracle-replay` is

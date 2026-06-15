@@ -429,7 +429,22 @@ a 7-statement MySQL capture translated to `mysql_slow_log+oracle-translated`, an
 `--verify live` without a MySQL configured fails fast with a clear message. The default
 build is unaffected (the whole command is `#[cfg(feature = "polyglot-transform")]`).
 
-**Phase 2g (next):** richer per-cell normalization (float/decimal tolerance, timezones),
-transaction-aware skipping (FR-XFORM-8), an `ON CONFLICT` upsert via the LLM generator
-(which the writes oracle can verify), and multi-dialect sources (Oracle, T-SQL → PG through
-the same seam).
+**Phase 2g — Oracle SQL Trace capture + Oracle→PG (built, 2026-06-15).** Oracle is reached
+by *upload*, not connection: `--source-type oracle-trace` (`capture::oracle_trace`) parses
+an uploaded event-10046 `.trc` into a workload (`source_dialect = Oracle`; top-level
+statements only, recursive dictionary SQL filtered). `SqlglotGenerator` is parameterized by
+read dialect and `oracle-replay` is dialect-aware, so Oracle workloads translate via sqlglot
+`read='oracle'`. **Proven end-to-end on real PG** (`scripts/e2e-replay.sh`, scenario D):
+Oracle trace → capture → oracle-replay → replay, with `NVL→COALESCE` + INSERT/UPDATE landing
+on the target. Anything sqlglot can't faithfully translate (e.g. `ROWNUM`) is behaviorally
+rejected by `--verify live`, never shipped.
+
+```
+================ scripts/e2e-replay.sh:  9 passed, 0 failed ================
+A PG→PG (csv)  B PG→PG (proxy)  C MySQL→PG  D Oracle→PG  E scale 3  F oracle-replay
+```
+
+**Phase 2h (next):** Oracle bind-variable substitution (from `BINDS` sections),
+richer per-cell normalization (float/decimal tolerance, timezones), transaction-aware
+skipping (FR-XFORM-8), an `ON CONFLICT` upsert via the LLM generator, and an AWR/`V$SQL`
+extract capture source (the easy-to-produce Oracle alternative).

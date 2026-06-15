@@ -48,6 +48,7 @@ fn main() -> Result<()> {
 fn cmd_oracle_replay(args: pg_retest::cli::OracleReplayArgs) -> Result<()> {
     use anyhow::anyhow;
     use pg_retest::profile::io;
+    use pg_retest::profile::SourceDialect;
     use pg_retest::transform::mysql_to_pg::mysql_to_pg_pipeline;
     use pg_retest::transform::oracle::engine::{CandidateGenerator, PipelineGenerator};
     use pg_retest::transform::oracle::golden::{conn_str, GoldenOracle};
@@ -68,19 +69,35 @@ fn cmd_oracle_replay(args: pg_retest::cli::OracleReplayArgs) -> Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     let (translated, report) = rt.block_on(async {
-        // Generator fleet: deterministic always; sqlglot + LLM if configured.
-        let mut generators: Vec<Box<dyn CandidateGenerator>> = vec![
-            PipelineGenerator::boxed("regex", mysql_to_pg_pipeline()),
-            PipelineGenerator::boxed("polyglot", mysql_to_pg_polyglot_pipeline()),
-        ];
-        if SqlglotGenerator::from_env().available().await {
-            generators.push(Box::new(SqlglotGenerator::from_env()));
-        }
-        if let Some(llm) = LlmGenerator::from_env() {
-            generators.push(Box::new(llm));
+        // Generator fleet, chosen by the workload's origin dialect.
+        let mut generators: Vec<Box<dyn CandidateGenerator>> = Vec::new();
+        match profile.source_dialect {
+            SourceDialect::Oracle => {
+                // The deterministic Rust generators (regex, polyglot) are MySQL→PG only;
+                // Oracle goes through sqlglot (read='oracle').
+                let sg = SqlglotGenerator::for_dialect("oracle");
+                if sg.available().await {
+                    generators.push(Box::new(sg));
+                } else {
+                    warn!("Oracle workload but sqlglot is unavailable (set PG_RETEST_SQLGLOT_PYTHON) — nothing will translate.");
+                }
+            }
+            _ => {
+                // MySQL (default): regex + polyglot + sqlglot(mysql) + optional LLM.
+                generators.push(PipelineGenerator::boxed("regex", mysql_to_pg_pipeline()));
+                generators
+                    .push(PipelineGenerator::boxed("polyglot", mysql_to_pg_polyglot_pipeline()));
+                if SqlglotGenerator::from_env().available().await {
+                    generators.push(Box::new(SqlglotGenerator::from_env()));
+                }
+                if let Some(llm) = LlmGenerator::from_env() {
+                    generators.push(Box::new(llm));
+                }
+            }
         }
         info!(
-            "generators: {:?}",
+            "source_dialect={:?}, generators: {:?}",
+            profile.source_dialect,
             generators.iter().map(|g| g.name()).collect::<Vec<_>>()
         );
 
@@ -172,7 +189,16 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
                 &args.source_host,
             )?
         }
-        other => anyhow::bail!("Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds"),
+        "oracle-trace" => {
+            use pg_retest::capture::oracle_trace::OracleTraceCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for oracle-trace capture")
+            })?;
+            OracleTraceCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        other => anyhow::bail!(
+            "Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds, oracle-trace"
+        ),
     };
 
     if args.id_mode.needs_sequences() {

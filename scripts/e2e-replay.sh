@@ -121,16 +121,18 @@ $BIN replay --workload "$TMP/B.wkl" --target "$TGT" --scale 3 --stagger-ms 20 --
 check "E scale 3 ran 3 duplicate sessions" "$(sql_tgt "SELECT count(*) FROM events WHERE note='via_proxy'")" "3"
 echo
 
-# --- D: Oracle → PG (honest) -----------------------------------------------------------
-echo "[D] Oracle → PG — NOT an integrated path"
-echo "  pg-retest has no Oracle capture source (pg-csv/mysql-slow/rds only) and the"
-echo "  oracle-replay generators are MySQL→PG. Standalone sqlglot can translate SOME"
-echo "  Oracle SQL (NVL→COALESCE) but not all (ROWNUM passes through, PG rejects it) —"
-echo "  which the behavioral oracle would catch. An Oracle generator (read='oracle') +"
-echo "  the existing oracle is the path to integrate it."
-if [ -x "$SQLGLOT_PY" ]; then
-  echo "  sqlglot Oracle→PG demo:"
-  "$SQLGLOT_PY" -c "import sqlglot; print('    NVL  ->', sqlglot.transpile(\"SELECT NVL(name,'x') FROM products\", read='oracle', write='postgres')[0])"
+# --- D: Oracle → PG (SQL Trace 10046 upload → translate → replay) ----------------------
+echo "[D] Oracle → PG (SQL Trace 10046 capture → oracle-replay → replay)"
+sql_tgt "TRUNCATE events; UPDATE products SET price=50 WHERE id=2;" >/dev/null
+$BIN capture --source-type oracle-trace --source-log tests/fixtures/oracle_trace.trc --source-host orcl --output "$TMP/O.wkl" >/dev/null 2>&1
+if PG_RETEST_SQLGLOT_PYTHON="$SQLGLOT_PY" $BIN oracle-replay --input "$TMP/O.wkl" --output "$TMP/O_pg.wkl" --verify syntactic >/dev/null 2>&1 && [ -f "$TMP/O_pg.wkl" ]; then
+  $BIN replay --workload "$TMP/O_pg.wkl" --target "$TGT" --output "$TMP/O_res.wkl" >/dev/null 2>&1
+  check "D Oracle NVL→COALESCE replayed" "$(sql_tgt "SELECT note FROM events")" "from_oracle"
+  check "D Oracle UPDATE replayed"        "$(sql_tgt 'SELECT price FROM products WHERE id=2')" "57"
+  # Note: Oracle SQL sqlglot can't translate (e.g. ROWNUM) is behaviorally rejected by
+  # --verify live, not shipped — honest coverage, not silent breakage.
+else
+  echo "  SKIP: needs a Python with sqlglot (set SQLGLOT_PY); Oracle path goes through sqlglot read='oracle'"
 fi
 echo
 

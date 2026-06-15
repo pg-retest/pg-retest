@@ -68,6 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skip reasons); sqlglot/LLM join the cascade when configured. Library core
   `transform::oracle::replay::translate_profile` (unit-tested, no DB); `SyntacticOracle`
   added for DB-free syntactic acceptance. Default build unaffected.
+- **Oracle Phase 2g — Oracle SQL Trace capture + Oracle→PG path.** New
+  `--source-type oracle-trace` (`capture::oracle_trace`) parses uploaded Oracle event-10046
+  trace files into a workload (`source_dialect = Oracle`; top-level statements only,
+  recursive dictionary SQL filtered; `EXEC` timing). `SqlglotGenerator` parameterized by
+  read dialect (`for_dialect("oracle")`), and `oracle-replay` is now dialect-aware (Oracle
+  workloads translate via sqlglot `read='oracle'`). Proven end-to-end: Oracle trace →
+  capture → oracle-replay → replay on real PG (NVL→COALESCE + INSERT/UPDATE land on
+  target). pg-retest never connects to Oracle — DBAs enable 10046 tracing and upload the
+  `.trc`. `scripts/e2e-replay.sh` now validates all four capture paths (9 passed, 0 failed).
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

@@ -1,0 +1,26 @@
+Trace file /u01/app/oracle/diag/rdbms/orcl/orcl/trace/orcl_ora_12345.trc
+Oracle Database 19c Enterprise Edition Release 19.0.0.0.0
+*** SESSION ID:(123.45678) 2026-06-15T10:00:00.000000+00:00
+*** CLIENT ID:(app_user) 2026-06-15T10:00:00.000000+00:00
+=====================
+PARSING IN CURSOR #140001 len=49 dep=0 uid=84 oct=3 lid=84 tim=1000000 hv=111 ad='7f01' sqlid='a1b2c3'
+SELECT NVL(name, 'unknown') FROM products WHERE id = 1
+END OF STMT
+PARSE #140001:c=120,e=240,p=0,cr=0,cu=0,mis=1,r=0,dep=0,og=1,plh=0,tim=1000000
+EXEC #140001:c=300,e=1500,p=0,cr=0,cu=0,mis=0,r=0,dep=0,og=1,plh=11,tim=1000300
+FETCH #140001:c=200,e=900,p=0,cr=4,cu=0,mis=0,r=1,dep=0,og=1,plh=11,tim=1001200
+=====================
+PARSING IN CURSOR #140002 len=35 dep=1 uid=0 oct=3 lid=0 tim=1002000 hv=222 ad='7f02' sqlid='r3c4r5'
+select obj#, type# from obj$ where owner=:1
+END OF STMT
+EXEC #140002:c=40,e=90,p=0,cr=2,cu=0,mis=0,r=0,dep=1,og=4,plh=22,tim=1002100
+=====================
+PARSING IN CURSOR #140003 len=51 dep=0 uid=84 oct=2 lid=84 tim=1003000 hv=333 ad='7f03' sqlid='i6n7s8'
+INSERT INTO events (note) VALUES ('from_oracle')
+END OF STMT
+EXEC #140003:c=410,e=2100,p=0,cr=1,cu=3,mis=0,r=1,dep=0,og=1,plh=33,tim=1003400
+=====================
+PARSING IN CURSOR #140004 len=58 dep=0 uid=84 oct=6 lid=84 tim=1004000 hv=444 ad='7f04' sqlid='u9p0d1'
+UPDATE products SET price = NVL(price, 0) + 7 WHERE id = 2
+END OF STMT
+EXEC #140004:c=380,e=1800,p=0,cr=2,cu=2,mis=0,r=1,dep=0,og=1,plh=44,tim=1004500

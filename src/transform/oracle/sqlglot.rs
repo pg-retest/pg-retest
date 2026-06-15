@@ -19,9 +19,12 @@ use tokio::process::Command;
 
 use super::engine::CandidateGenerator;
 
-/// The transpile script: read MySQL SQL on stdin, print the single PostgreSQL statement
-/// on stdout, or exit non-zero (multi-statement / parse error / sqlglot missing).
-const SCRIPT: &str = r#"
+/// The transpile script for a given source dialect: read SQL on stdin, print the single
+/// PostgreSQL statement on stdout, or exit non-zero (multi-statement / parse error /
+/// sqlglot missing). `read` is the sqlglot source dialect, e.g. "mysql" or "oracle".
+fn script(read: &str) -> String {
+    format!(
+        r#"
 import sys
 try:
     import sqlglot
@@ -29,28 +32,42 @@ except Exception:
     sys.exit(10)
 sql = sys.stdin.read()
 try:
-    out = sqlglot.transpile(sql, read="mysql", write="postgres")
+    out = sqlglot.transpile(sql, read="{read}", write="postgres")
 except Exception:
     sys.exit(2)
 if len(out) != 1:
     sys.exit(3)
 sys.stdout.write(out[0])
-"#;
+"#
+    )
+}
 
 pub struct SqlglotGenerator {
     python: String,
+    /// sqlglot source dialect ("mysql", "oracle", …).
+    read: String,
 }
 
 impl SqlglotGenerator {
-    pub fn new(python: impl Into<String>) -> Self {
+    pub fn new(python: impl Into<String>, read: impl Into<String>) -> Self {
         Self {
             python: python.into(),
+            read: read.into(),
         }
     }
 
-    /// Interpreter from `PG_RETEST_SQLGLOT_PYTHON` (default `python3`).
+    fn env_python() -> String {
+        std::env::var("PG_RETEST_SQLGLOT_PYTHON").unwrap_or_else(|_| "python3".into())
+    }
+
+    /// MySQL→PG generator from `PG_RETEST_SQLGLOT_PYTHON` (default `python3`).
     pub fn from_env() -> Self {
-        Self::new(std::env::var("PG_RETEST_SQLGLOT_PYTHON").unwrap_or_else(|_| "python3".into()))
+        Self::new(Self::env_python(), "mysql")
+    }
+
+    /// Generator for an arbitrary sqlglot source dialect (e.g. "oracle").
+    pub fn for_dialect(read: impl Into<String>) -> Self {
+        Self::new(Self::env_python(), read)
     }
 
     /// True if `<python> -c "import sqlglot"` succeeds — gate tests/benchmarks on this.
@@ -73,10 +90,10 @@ impl CandidateGenerator for SqlglotGenerator {
         "sqlglot"
     }
 
-    async fn candidate(&self, mysql_sql: &str) -> Option<String> {
+    async fn candidate(&self, source_sql: &str) -> Option<String> {
         let mut child = Command::new(&self.python)
             .arg("-c")
-            .arg(SCRIPT)
+            .arg(script(&self.read))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -84,7 +101,7 @@ impl CandidateGenerator for SqlglotGenerator {
             .ok()?;
         {
             let mut stdin = child.stdin.take()?;
-            stdin.write_all(mysql_sql.as_bytes()).await.ok()?;
+            stdin.write_all(source_sql.as_bytes()).await.ok()?;
             // stdin dropped here → EOF so the script's read() returns.
         }
         let out = child.wait_with_output().await.ok()?;
@@ -101,9 +118,24 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn test_oracle_dialect_translates_nvl_to_coalesce() {
+        // Skips unless a real sqlglot is available (PG_RETEST_SQLGLOT_PYTHON).
+        let g = SqlglotGenerator::for_dialect("oracle");
+        if !g.available().await {
+            eprintln!("SKIP: sqlglot not available");
+            return;
+        }
+        let out = g.candidate("SELECT NVL(name, 'x') FROM t").await;
+        assert!(
+            out.as_deref().is_some_and(|s| s.contains("COALESCE")),
+            "expected NVL→COALESCE, got: {out:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_declines_when_python_missing() {
         // A bogus interpreter → spawn fails → declines (None), never panics.
-        let g = SqlglotGenerator::new("definitely-not-a-real-python-xyz");
+        let g = SqlglotGenerator::new("definitely-not-a-real-python-xyz", "mysql");
         assert!(!g.available().await);
         assert!(g.candidate("SELECT 1").await.is_none());
     }
