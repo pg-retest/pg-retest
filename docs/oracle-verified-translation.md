@@ -149,6 +149,23 @@ cargo test --features polyglot-transform --test oracle_deep_benchmark -- --nocap
     UNION      23/23   <- multi-pass (any generator verified)
 ```
 
+### End-to-end replay validation
+
+`scripts/e2e-replay.sh` spins up throwaway PostgreSQL + MySQL containers, drives real
+`pg-retest` commands, and validates replay by observing target-DB state changes — then
+tears everything down. It covers: PG→PG (CSV capture), PG→PG (live proxy capture),
+MySQL→PG (mysql-slow capture + transform), the `oracle-replay` command, and duplicate
+sessions (`replay --scale 3`). It also documents that Oracle→PG is not an integrated path
+(no Oracle capture source; the generators are MySQL→PG).
+
+```bash
+./scripts/e2e-replay.sh
+# ================ RESULTS:  7 passed, 0 failed ================
+```
+
+> The script builds with `--features polyglot-transform` because `oracle-replay` is
+> feature-gated — a plain `cargo build` produces a binary *without* the command.
+
 ## 5. Build an oracle replay (end-to-end workflow)
 
 The migration-validation pipeline is **capture → transform → replay → compare**, with the
