@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   UPDATE/DELETE Equivalent; a wrong-row candidate caught (Divergent); an untranslatable
   `ON DUPLICATE KEY UPDATE` Errored (honestly skipped, never accepted); sqlglot's UPDATE
   translation state-verified.
+- **Oracle Phase 2e — deep benchmark + operator guide (experimental).** A broad
+  23-construct MySQL corpus (`tests/fixtures/oracle/corpus_deep.toml`) run through every
+  generator and verified against real MySQL (`tests/oracle_deep_benchmark.rs`), producing a
+  per-construct × per-generator coverage matrix (regex 19/23, polyglot 21/23, sqlglot
+  23/23, multi-pass union 23/23). New operator guide
+  **`docs/oracle-verified-translation.md`**: how to enable the feature, every environment
+  variable, the PostgreSQL/MySQL/sqlglot/LLM setup, running each benchmark, and the
+  capture→translate→replay→compare workflow.
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

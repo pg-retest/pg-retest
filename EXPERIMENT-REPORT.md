@@ -391,6 +391,26 @@ write-diff oracle: sqlglot's UPDATE translation state-verified Equivalent.
   invalid upsert never accepted as if it worked.
 - sqlglot's `UPDATE` translation, fed through the generator, is state-verified.
 
-**Phase 2e (next):** richer per-cell normalization (float tolerance, timezones, decimal
-scale), an `ON CONFLICT` upsert via the LLM generator (which the writes oracle can now
-verify), a larger cross-engine corpus, and multi-dialect sources (Oracle, T-SQL).
+**Phase 2e — deep benchmark + user guide (built, 2026-06-15).** A broad 23-construct
+corpus (`tests/fixtures/oracle/corpus_deep.toml`) run through every generator and verified
+against **real MySQL** (`tests/oracle_deep_benchmark.rs`), producing a coverage matrix:
+
+```
+  per-generator behavioral coverage (oracle-verified Equivalent):
+    regex      19/23      polyglot   21/23      sqlglot    23/23
+    UNION      23/23   <- multi-pass (any generator verified)
+```
+
+The matrix is the honest picture: no deterministic tool is safe alone — `regex` *diverges*
+on the string literal (silently wrong) and errors on GROUP_CONCAT/MOD/DATE_FORMAT;
+`polyglot` *diverges* on `DATE_FORMAT` (keeps MySQL `%Y-%m` format codes — output that runs
+on PG but returns the wrong string) and errors on `IF()`. Both divergences are caught
+*only* by execution. The full operator guide — turning the feature on, every environment
+variable, the container/sqlglot/LLM setup, running each benchmark, and the
+capture→translate→replay→compare workflow — is in
+**[`docs/oracle-verified-translation.md`](docs/oracle-verified-translation.md)**.
+
+**Phase 2f (next):** richer per-cell normalization (float/decimal tolerance, timezones), an
+`ON CONFLICT` upsert via the LLM generator (which the writes oracle can now verify), a
+single `pg-retest oracle-replay` CLI subcommand threading a whole `.wkl` through the engine,
+and multi-dialect sources (Oracle, T-SQL → PG "for free" through the same seam).

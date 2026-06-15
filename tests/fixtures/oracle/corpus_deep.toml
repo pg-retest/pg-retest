@@ -1,0 +1,119 @@
+# Deep corpus: a broad set of MySQL SELECT constructs. Truth = execution on a REAL MySQL
+# (the live differential oracle), so only the original MySQL query is needed — no
+# hand-authored PG reference. Each query is deterministic on tests/fixtures/oracle/seed.sql
+# and returns int/text/date results (safe for exact cross-engine canonicalization).
+
+[[case]]
+id = "ifnull"
+mysql_sql = "SELECT IFNULL(name, 'none') FROM oracle_users ORDER BY id"
+note = "IFNULL -> COALESCE"
+
+[[case]]
+id = "if_function"
+mysql_sql = "SELECT IF(active = 1, 'yes', 'no') FROM oracle_users ORDER BY id"
+note = "IF() -> CASE"
+
+[[case]]
+id = "backticks"
+mysql_sql = "SELECT `id`, `name` FROM `oracle_users` ORDER BY id"
+note = "backtick identifiers"
+
+[[case]]
+id = "limit_offset"
+mysql_sql = "SELECT id FROM oracle_users ORDER BY id LIMIT 1, 2"
+note = "LIMIT offset,count -> LIMIT/OFFSET"
+
+[[case]]
+id = "string_literal_if"
+mysql_sql = "SELECT 'IF(x,1,0)'"
+note = "IF( inside a string literal (must be preserved)"
+
+[[case]]
+id = "concat"
+mysql_sql = "SELECT CONCAT(name, '!') FROM oracle_users WHERE name IS NOT NULL ORDER BY id"
+note = "CONCAT"
+
+[[case]]
+id = "concat_ws"
+mysql_sql = "SELECT CONCAT_WS('-', name, active) FROM oracle_users WHERE name IS NOT NULL ORDER BY id"
+note = "CONCAT_WS"
+
+[[case]]
+id = "upper"
+mysql_sql = "SELECT UPPER(name) FROM oracle_users WHERE name IS NOT NULL ORDER BY id"
+note = "UPPER (portable)"
+
+[[case]]
+id = "char_length"
+mysql_sql = "SELECT CHAR_LENGTH(name) FROM oracle_users WHERE name IS NOT NULL ORDER BY id"
+note = "CHAR_LENGTH"
+
+[[case]]
+id = "substring"
+mysql_sql = "SELECT SUBSTRING(name, 1, 2) FROM oracle_users WHERE name IS NOT NULL ORDER BY id"
+note = "SUBSTRING"
+
+[[case]]
+id = "replace_fn"
+mysql_sql = "SELECT REPLACE(name, 'a', 'A') FROM oracle_users WHERE name IS NOT NULL ORDER BY id"
+note = "REPLACE (portable)"
+
+[[case]]
+id = "coalesce_native"
+mysql_sql = "SELECT COALESCE(name, 'x') FROM oracle_users ORDER BY id"
+note = "already PG-compatible"
+
+[[case]]
+id = "count_star"
+mysql_sql = "SELECT COUNT(*) FROM oracle_users"
+note = "COUNT(*)"
+
+[[case]]
+id = "sum"
+mysql_sql = "SELECT SUM(score) FROM oracle_users"
+note = "SUM"
+
+[[case]]
+id = "group_concat"
+mysql_sql = "SELECT GROUP_CONCAT(name ORDER BY id SEPARATOR ',') FROM oracle_users WHERE name IS NOT NULL"
+note = "GROUP_CONCAT -> STRING_AGG"
+
+[[case]]
+id = "distinct"
+mysql_sql = "SELECT DISTINCT active FROM oracle_users ORDER BY active"
+note = "DISTINCT (portable)"
+
+[[case]]
+id = "having"
+mysql_sql = "SELECT active, COUNT(*) FROM oracle_users GROUP BY active HAVING COUNT(*) >= 1 ORDER BY active"
+note = "GROUP BY / HAVING (portable)"
+
+[[case]]
+id = "mod_operator"
+mysql_sql = "SELECT id, id MOD 2 FROM oracle_users ORDER BY id"
+note = "MOD operator -> %"
+
+[[case]]
+id = "date_format"
+mysql_sql = "SELECT DATE_FORMAT(created, '%Y-%m') FROM oracle_users ORDER BY id"
+note = "DATE_FORMAT -> TO_CHAR (format codes must convert)"
+
+[[case]]
+id = "least_greatest"
+mysql_sql = "SELECT LEAST(id, score), GREATEST(id, score) FROM oracle_users ORDER BY id"
+note = "LEAST/GREATEST (portable)"
+
+[[case]]
+id = "in_clause"
+mysql_sql = "SELECT id FROM oracle_users WHERE id IN (1, 3) ORDER BY id"
+note = "IN (portable)"
+
+[[case]]
+id = "between"
+mysql_sql = "SELECT id FROM oracle_users WHERE id BETWEEN 2 AND 3 ORDER BY id"
+note = "BETWEEN (portable)"
+
+[[case]]
+id = "like"
+mysql_sql = "SELECT name FROM oracle_users WHERE name LIKE 'c%' ORDER BY id"
+note = "LIKE (portable)"

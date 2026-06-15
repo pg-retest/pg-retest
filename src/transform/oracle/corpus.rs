@@ -8,7 +8,10 @@ use serde::Deserialize;
 pub struct Case {
     pub id: String,
     pub mysql_sql: String,
-    /// The human-verified correct PostgreSQL translation — the oracle's source of truth.
+    /// The human-verified correct PostgreSQL translation — the `GoldenOracle`'s source of
+    /// truth. Optional: the live (real-MySQL) oracle derives truth by execution, so a
+    /// MySQL-only deep corpus omits it.
+    #[serde(default)]
     pub correct_pg_sql: String,
     #[serde(default)]
     pub note: String,
