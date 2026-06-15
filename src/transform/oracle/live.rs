@@ -89,6 +89,63 @@ impl LiveDiffOracle {
             })
             .collect()
     }
+
+    /// Verify a WRITE (INSERT/UPDATE/DELETE) by resulting TABLE STATE — the model the
+    /// result-set `Oracle::verify` can't express (a write returns no rows). Reset both
+    /// engines to a known seed, apply the ORIGINAL on MySQL and the CANDIDATE on PG, then
+    /// diff `state_query` across the two. `Equivalent` only if the post-write states match
+    /// exactly; PG-invalid candidates (e.g. an untranslated `ON DUPLICATE KEY UPDATE`)
+    /// surface as `Error` and are honestly skipped, never accepted.
+    pub async fn verify_write(
+        &self,
+        candidate_pg: &str,
+        original_mysql: &str,
+        reset_pg: &str,
+        reset_mysql: &str,
+        state_query: &str,
+    ) -> Verdict {
+        macro_rules! step {
+            ($f:expr, $what:expr) => {
+                if let Err(e) = $f.await {
+                    return Verdict::Error {
+                        detail: format!("{}: {e}", $what),
+                    };
+                }
+            };
+        }
+        step!(self.batch_pg(reset_pg), "pg reset");
+        step!(self.mysql_exec(reset_mysql), "mysql reset");
+        step!(self.mysql_exec(original_mysql), "mysql write"); // truth
+        step!(self.batch_pg(candidate_pg), "pg write"); // candidate (invalid → Error)
+
+        let truth = match self.mysql_canonical(state_query).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Verdict::Error {
+                    detail: format!("mysql state: {e}"),
+                }
+            }
+        };
+        let cand = match self.pg_canonical(state_query).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Verdict::Error {
+                    detail: format!("pg state: {e}"),
+                }
+            }
+        };
+        if rows_equivalent(&cand, &truth, is_ordered(state_query)) {
+            Verdict::Equivalent
+        } else {
+            Verdict::Divergent {
+                detail: format!(
+                    "post-write state differs ({} pg vs {} mysql rows)",
+                    cand.len(),
+                    truth.len()
+                ),
+            }
+        }
+    }
 }
 
 #[async_trait]

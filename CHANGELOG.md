@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where polyglot passes it through. Proven on live PG (`tests/oracle_sqlglot_test.rs`,
   sqlglot 30.11.0): in the `[polyglot, sqlglot]` cascade, polyglot's `IF()` passthrough is
   rejected by the oracle on execution and sqlglot wins — added coverage, no engine change.
+- **Oracle Phase 2d — writes/DML oracle (experimental).** `LiveDiffOracle::verify_write`
+  verifies INSERT/UPDATE/DELETE translations by resulting TABLE STATE (a write returns no
+  rows): reset both engines, apply original on MySQL and candidate on PG, diff a state
+  query. Proven on real MySQL 8.0 + PostgreSQL 16 (`tests/oracle_writes_test.rs`): correct
+  UPDATE/DELETE Equivalent; a wrong-row candidate caught (Divergent); an untranslatable
+  `ON DUPLICATE KEY UPDATE` Errored (honestly skipped, never accepted); sqlglot's UPDATE
+  translation state-verified.
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

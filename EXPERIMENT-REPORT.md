@@ -371,7 +371,26 @@ In the cascade `[polyglot, sqlglot]`, polyglot's `IF()` passthrough is rejected 
 oracle (execution error) and **sqlglot wins** — added coverage, picked up automatically
 by verified search, no engine change.
 
-**Phase 2d (next):** **writes/DML** (a different verification model — compare resulting
-*table state*, not result sets — so `INSERT … ON DUPLICATE KEY UPDATE` and friends can be
-verified), richer per-cell normalization (float tolerance, timezones, decimal scale), and
-a larger cross-engine corpus / multi-dialect (Oracle, T-SQL) sources.
+**Phase 2d — writes/DML oracle (built, 2026-06-15).** A write returns no rows, so the
+result-set oracle can't express it. `LiveDiffOracle::verify_write` instead compares
+resulting **table state**: reset both engines to a seed, apply the original on MySQL and
+the candidate on PG, then diff a state query across the two engines.
+
+Proven on real MySQL 8.0 + PostgreSQL 16 (`tests/oracle_writes_test.rs`):
+
+```
+write-diff oracle: correct UPDATE/DELETE Equivalent; wrong write caught; untranslatable upsert honestly Errored.
+write-diff oracle: sqlglot's UPDATE translation state-verified Equivalent.
+```
+
+- A correct `UPDATE` (`IFNULL`→`COALESCE`) and `DELETE` produce identical post-write
+  state → `Equivalent`.
+- A candidate that updates the *wrong row* → `Divergent` (state diff catches it).
+- `INSERT … ON DUPLICATE KEY UPDATE` — which *no* deterministic generator translates
+  (sqlglot 30.11.0 passes it through, PG rejects it) → `Error`, **honestly skipped**, an
+  invalid upsert never accepted as if it worked.
+- sqlglot's `UPDATE` translation, fed through the generator, is state-verified.
+
+**Phase 2e (next):** richer per-cell normalization (float tolerance, timezones, decimal
+scale), an `ON CONFLICT` upsert via the LLM generator (which the writes oracle can now
+verify), a larger cross-engine corpus, and multi-dialect sources (Oracle, T-SQL).
