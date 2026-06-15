@@ -212,6 +212,7 @@ pub(crate) fn build_profile(
                     cq.sql
                 };
                 Query {
+                    original_sql: None,
                     kind: QueryKind::from_sql(&sql),
                     sql,
                     start_offset_us: cq.start_offset_us,
@@ -246,6 +247,7 @@ pub(crate) fn build_profile(
     let total_sessions = sessions.len() as u64;
 
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: source_host.to_string(),
@@ -477,6 +479,7 @@ pub(crate) fn build_profile_from_staging(
                     .as_deref()
                     .and_then(|json| serde_json::from_str::<Vec<ResponseRow>>(json).ok());
                 Query {
+                    original_sql: None,
                     kind: QueryKind::from_sql(&sql),
                     sql,
                     start_offset_us: sr.start_offset_us as u64,
@@ -509,6 +512,7 @@ pub(crate) fn build_profile_from_staging(
     let total_sessions = sessions.len() as u64;
 
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: source_host.to_string(),

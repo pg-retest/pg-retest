@@ -5,6 +5,7 @@ use pg_retest::transform::plan::*;
 
 fn sample_profile() -> WorkloadProfile {
     WorkloadProfile {
+            source_dialect: Default::default(),
         version: 2,
         captured_at: chrono::Utc::now(),
         source_host: "localhost:5432".into(),
@@ -17,6 +18,7 @@ fn sample_profile() -> WorkloadProfile {
                 database: "testdb".into(),
                 queries: vec![
                     Query {
+            original_sql: None,
                         sql: "SELECT * FROM products WHERE id = $1".into(),
                         start_offset_us: 0,
                         duration_us: 500,
@@ -25,6 +27,7 @@ fn sample_profile() -> WorkloadProfile {
                         response_values: None,
                     },
                     Query {
+            original_sql: None,
                         sql: "SELECT p.name, c.label FROM products p JOIN categories c ON p.category_id = c.id WHERE p.id = $1".into(),
                         start_offset_us: 1000,
                         duration_us: 200,
@@ -33,6 +36,7 @@ fn sample_profile() -> WorkloadProfile {
                         response_values: None,
                     },
                     Query {
+            original_sql: None,
                         sql: "INSERT INTO orders (product_id, qty) VALUES ($1, $2)".into(),
                         start_offset_us: 2000,
                         duration_us: 300,
@@ -41,6 +45,7 @@ fn sample_profile() -> WorkloadProfile {
                         response_values: None,
                     },
                     Query {
+            original_sql: None,
                         sql: "SELECT * FROM products WHERE category_id = $1".into(),
                         start_offset_us: 3000,
                         duration_us: 800,
@@ -56,6 +61,7 @@ fn sample_profile() -> WorkloadProfile {
                 database: "testdb".into(),
                 queries: vec![
                     Query {
+            original_sql: None,
                         sql: "SELECT * FROM products ORDER BY created_at DESC LIMIT 10".into(),
                         start_offset_us: 0,
                         duration_us: 1200,
@@ -64,6 +70,7 @@ fn sample_profile() -> WorkloadProfile {
                         response_values: None,
                     },
                     Query {
+            original_sql: None,
                         sql: "SELECT count(*) FROM orders WHERE status = 'pending'".into(),
                         start_offset_us: 2000,
                         duration_us: 400,

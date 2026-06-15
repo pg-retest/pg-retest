@@ -36,6 +36,7 @@ async fn require_pg() -> bool {
 fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
     let total_queries: u64 = sessions.iter().map(|s| s.queries.len() as u64).sum();
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "test".into(),
@@ -54,6 +55,7 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
 
 fn make_query(sql: &str, offset_us: u64, kind: QueryKind, txn_id: Option<u64>) -> Query {
     Query {
+        original_sql: None,
         sql: sql.to_string(),
         start_offset_us: offset_us,
         duration_us: 100,

@@ -85,6 +85,7 @@ fn test_pipeline_threshold_evaluation() {
     use pg_retest::profile::{io, Metadata, Query, QueryKind, Session, WorkloadProfile};
 
     let profile = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: chrono::Utc::now(),
         source_host: "test".into(),
@@ -95,6 +96,7 @@ fn test_pipeline_threshold_evaluation() {
             user: "test".into(),
             database: "test".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,

@@ -9,6 +9,7 @@ use tempfile::NamedTempFile;
 #[test]
 fn test_response_values_in_profile() {
     let profile = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "localhost".into(),
@@ -19,6 +20,7 @@ fn test_response_values_in_profile() {
             user: "app".into(),
             database: "mydb".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "INSERT INTO orders (name) VALUES ('test') RETURNING id".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -105,6 +107,7 @@ fn test_id_map_fk_chain_substitution() {
 fn test_correlate_requires_proxy_capture() {
     // Verify that a log-captured workload can be detected by checking capture_method
     let profile = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "localhost".into(),
@@ -145,6 +148,7 @@ fn test_inject_returning_composite_pk() {
 #[test]
 fn test_pk_map_in_profile() {
     let profile = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "localhost".into(),

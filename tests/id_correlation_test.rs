@@ -7,6 +7,7 @@ use tempfile::NamedTempFile;
 #[test]
 fn test_sequence_snapshot_in_profile() {
     let profile = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "localhost".into(),
@@ -17,6 +18,7 @@ fn test_sequence_snapshot_in_profile() {
             user: "app".into(),
             database: "mydb".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -69,6 +71,7 @@ fn test_sequence_snapshot_in_profile() {
 #[test]
 fn test_profile_backward_compat() {
     let profile = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "localhost".into(),
@@ -79,6 +82,7 @@ fn test_profile_backward_compat() {
             user: "app".into(),
             database: "mydb".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,

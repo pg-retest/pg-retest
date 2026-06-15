@@ -15,6 +15,7 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
     let total_queries = sessions.iter().map(|s| s.queries.len() as u64).sum();
     let total_sessions = sessions.len() as u64;
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "test".into(),
@@ -38,6 +39,7 @@ fn test_classify_analytical_session() {
         1,
         vec![
             Query {
+                original_sql: None,
                 sql: "SELECT * FROM large_table".into(),
                 start_offset_us: 0,
                 duration_us: 50_000, // 50ms
@@ -46,6 +48,7 @@ fn test_classify_analytical_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT count(*) FROM orders".into(),
                 start_offset_us: 1000,
                 duration_us: 30_000, // 30ms
@@ -54,6 +57,7 @@ fn test_classify_analytical_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT sum(total) FROM orders GROUP BY region".into(),
                 start_offset_us: 2000,
                 duration_us: 100_000, // 100ms
@@ -77,6 +81,7 @@ fn test_classify_transactional_session() {
         1,
         vec![
             Query {
+                original_sql: None,
                 sql: "BEGIN".into(),
                 start_offset_us: 0,
                 duration_us: 10,
@@ -85,6 +90,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT balance FROM accounts".into(),
                 start_offset_us: 100,
                 duration_us: 500,
@@ -93,6 +99,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "UPDATE accounts SET balance = 100".into(),
                 start_offset_us: 200,
                 duration_us: 800,
@@ -101,6 +108,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "COMMIT".into(),
                 start_offset_us: 300,
                 duration_us: 20,
@@ -109,6 +117,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "BEGIN".into(),
                 start_offset_us: 400,
                 duration_us: 10,
@@ -117,6 +126,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO log VALUES (1)".into(),
                 start_offset_us: 500,
                 duration_us: 600,
@@ -125,6 +135,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "COMMIT".into(),
                 start_offset_us: 600,
                 duration_us: 20,
@@ -133,6 +144,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "BEGIN".into(),
                 start_offset_us: 700,
                 duration_us: 10,
@@ -141,6 +153,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "UPDATE accounts SET balance = 200".into(),
                 start_offset_us: 800,
                 duration_us: 900,
@@ -149,6 +162,7 @@ fn test_classify_transactional_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "COMMIT".into(),
                 start_offset_us: 900,
                 duration_us: 20,
@@ -171,6 +185,7 @@ fn test_classify_bulk_session() {
         1,
         vec![
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (1)".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -179,6 +194,7 @@ fn test_classify_bulk_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (2)".into(),
                 start_offset_us: 100,
                 duration_us: 100,
@@ -187,6 +203,7 @@ fn test_classify_bulk_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (3)".into(),
                 start_offset_us: 200,
                 duration_us: 100,
@@ -195,6 +212,7 @@ fn test_classify_bulk_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (4)".into(),
                 start_offset_us: 300,
                 duration_us: 100,
@@ -203,6 +221,7 @@ fn test_classify_bulk_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (5)".into(),
                 start_offset_us: 400,
                 duration_us: 100,
@@ -225,6 +244,7 @@ fn test_classify_mixed_session() {
         1,
         vec![
             Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 1000,
@@ -233,6 +253,7 @@ fn test_classify_mixed_session() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (1)".into(),
                 start_offset_us: 100,
                 duration_us: 1000,
@@ -254,6 +275,7 @@ fn test_classify_workload_majority_vote() {
         make_session(
             1,
             vec![Query {
+                original_sql: None,
                 sql: "SELECT * FROM huge".into(),
                 start_offset_us: 0,
                 duration_us: 50_000,
@@ -265,6 +287,7 @@ fn test_classify_workload_majority_vote() {
         make_session(
             2,
             vec![Query {
+                original_sql: None,
                 sql: "SELECT sum(x) FROM big".into(),
                 start_offset_us: 0,
                 duration_us: 40_000,
@@ -276,6 +299,7 @@ fn test_classify_workload_majority_vote() {
         make_session(
             3,
             vec![Query {
+                original_sql: None,
                 sql: "SELECT avg(y) FROM large".into(),
                 start_offset_us: 0,
                 duration_us: 60_000,
@@ -289,6 +313,7 @@ fn test_classify_workload_majority_vote() {
             4,
             vec![
                 Query {
+                    original_sql: None,
                     sql: "SELECT 1".into(),
                     start_offset_us: 0,
                     duration_us: 500,
@@ -297,6 +322,7 @@ fn test_classify_workload_majority_vote() {
                     response_values: None,
                 },
                 Query {
+                    original_sql: None,
                     sql: "INSERT INTO t VALUES (1)".into(),
                     start_offset_us: 100,
                     duration_us: 500,

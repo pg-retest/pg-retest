@@ -6,6 +6,29 @@ use serde::{Deserialize, Serialize};
 use crate::correlate::capture::{ResponseRow, TablePk};
 use crate::correlate::sequence::SequenceState;
 
+/// The SQL dialect a captured workload was written in.
+///
+/// Additive, backward-compatible: existing `.wkl` files that predate this field
+/// deserialize as `Postgres` (the `#[default]`), preserving today's behavior in
+/// which captured SQL is assumed to be PostgreSQL. Maps to `polyglot_sql::DialectType`
+/// via `transform::dialect::to_polyglot` (only compiled with the `polyglot-transform`
+/// feature). Spec: `include/polyglot-sql-transform.md` FR-XFORM-11.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceDialect {
+    /// PostgreSQL — the default; matches pre-`source_dialect` capture behavior.
+    #[default]
+    Postgres,
+    MySql,
+    Oracle,
+    /// SQL Server / Azure SQL (Polyglot `DialectType::TSQL`).
+    SqlServer,
+    Snowflake,
+    ClickHouse,
+    /// Unknown/unsupported origin dialect (Polyglot `DialectType::Generic`).
+    Other,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkloadProfile {
     pub version: u8,
@@ -15,6 +38,17 @@ pub struct WorkloadProfile {
     pub capture_method: String,
     pub sessions: Vec<Session>,
     pub metadata: Metadata,
+    /// Origin SQL dialect of the captured workload. Backward-compatible: absent in
+    /// pre-existing `.wkl` files → deserializes as `SourceDialect::Postgres`.
+    ///
+    /// MUST stay the LAST field: `profile::io` serializes with `rmp_serde::to_vec`
+    /// (MessagePack *array*/positional encoding), so `#[serde(default)]` only rescues
+    /// *trailing* missing fields when decoding older, shorter `.wkl` arrays. Inserting
+    /// this field mid-struct (as the source spec drafted it) would misalign positional
+    /// decoding and break old-file loading. Same rule the existing additive fields
+    /// (`Query.transaction_id`/`response_values`/`original_sql`) already follow.
+    #[serde(default)]
+    pub source_dialect: SourceDialect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +69,11 @@ pub struct Query {
     pub transaction_id: Option<u64>,
     #[serde(default)]
     pub response_values: Option<Vec<ResponseRow>>,
+    /// The source-native SQL as captured, retained when a dialect transform rewrites
+    /// `sql`. `None` for PG-native / untransformed queries (preserves byte-compat of
+    /// existing profiles). Spec: `include/polyglot-sql-transform.md` FR-XFORM-10.
+    #[serde(default)]
+    pub original_sql: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
