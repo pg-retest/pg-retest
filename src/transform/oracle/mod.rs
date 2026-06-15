@@ -17,6 +17,7 @@
 pub mod corpus;
 pub mod engine;
 pub mod golden;
+pub mod live;
 pub mod llm;
 pub mod normalize;
 

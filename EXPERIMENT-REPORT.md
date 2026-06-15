@@ -330,8 +330,30 @@ nondeterministic tools plug into the same engine. Added the **LLM generator**
 
 19 oracle unit tests; clippy clean and suite green feature OFF/ON.
 
-**Phase 2b (next):** the **live-MySQL differential** oracle (run the original on a real
-MySQL via the cached `mysql:8.0` image — `LiveDiffOracle` impls the same `Oracle` trait,
-zero engine change — with cross-engine row normalization), the **sqlglot-subprocess**
-generator (needs `pip install sqlglot`), and **writes/DML** (table-state comparison).
-Richer per-cell normalization (float tolerance, timezones) lands when a corpus case needs it.
+**Phase 2b — live-MySQL differential oracle (built, 2026-06-15).** The truest oracle:
+run the *original* query on a real MySQL and the *candidate* on a real PostgreSQL, then
+diff. `src/transform/oracle/live.rs` — `LiveDiffOracle` implements the same `Oracle`
+trait, so the multi-pass engine consumes it with **zero change**; only the truth source
+differs (live MySQL execution instead of an author-verified reference). MySQL is reached
+via its CLI (no Rust driver dependency — the aws/bedrock external-tool pattern),
+configured by `PG_RETEST_MYSQL_CMD`. The crux — **cross-engine result normalization** —
+is in `normalize.rs` (`parse_pg_record` / `parse_mysql_row`): it reconciles the two
+engines' genuinely-different text output (PG record-text `(1,alice,,"a,b")` vs MySQL
+tab-separated; NULL-vs-`''`), and is covered by 6 pure unit tests (the false-diff guard)
+*plus* validated end-to-end against real engines.
+
+Proven on real MySQL 8.0 + PostgreSQL 16 (`tests/oracle_live_mysql_test.rs`):
+
+```
+live-diff oracle: all 5 corpus translations Equivalent vs real MySQL; wrong candidate caught.
+```
+
+Every author-verified translation behaviorally matched its MySQL original across the two
+engines, a deliberately-wrong candidate was caught, and the full multi-pass engine —
+refereed by the *live* oracle — picked the same engine per query as the golden benchmark
+(polyglot the string-literal case, regex `IF()`→`CASE`), now confirmed by **execution on
+real MySQL vs real PostgreSQL**.
+
+**Phase 2c (next):** the **sqlglot-subprocess** generator (needs `pip install sqlglot`),
+**writes/DML** (table-state comparison, not result-set), richer per-cell normalization
+(float tolerance, timezones, decimal scale), and a larger cross-engine corpus.

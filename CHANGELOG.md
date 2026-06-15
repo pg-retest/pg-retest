@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PG_RETEST_LLM_URL`). The oracle makes it safe by construction — a wrong LLM
   translation is rejected, never trusted — proven deterministically by a "flaky
   generator" safety test and a mock-endpoint HTTP test (no live LLM required).
+- **Oracle Phase 2b — live-MySQL differential oracle (experimental).** The truest
+  oracle: `LiveDiffOracle` (`src/transform/oracle/live.rs`) runs the original query on a
+  real MySQL (via its CLI — no Rust driver dep; configured by `PG_RETEST_MYSQL_CMD`) and
+  the candidate on PostgreSQL, then diffs. Implements the same `Oracle` trait, so it drops
+  into the engine unchanged. Cross-engine result normalization (`parse_pg_record` /
+  `parse_mysql_row` in `normalize.rs`) reconciles record-text vs TSV and NULL-vs-`''`,
+  guarded by 6 unit tests. Proven on real MySQL 8.0 + PostgreSQL 16
+  (`tests/oracle_live_mysql_test.rs`): all corpus translations behaviorally Equivalent to
+  their MySQL originals across the two engines; wrong candidate caught; the multi-pass
+  engine picks the right engine per query, verified by execution on both real engines.
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in
