@@ -77,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture → oracle-replay → replay on real PG (NVL→COALESCE + INSERT/UPDATE land on
   target). pg-retest never connects to Oracle — DBAs enable 10046 tracing and upload the
   `.trc`. `scripts/e2e-replay.sh` now validates all four capture paths (9 passed, 0 failed).
+- **Oracle Phase 2h — bind-variable substitution.** The 10046 trace parser reads `BINDS`
+  sections and substitutes bind placeholders positionally (`WHERE id = :1` + `value=42` →
+  `WHERE id = 42`; numbers pass through, strings become quoted literals with `''` escaping)
+  so bind-heavy OLTP traces replay faithfully. Proven in the e2e (scenario D): a bound
+  `UPDATE price = NVL(:1,0)+7` with `:1=100` lands as `107` on the target PG. Heuristic
+  (`:\w+`); a `:NN` inside a string literal could be misread, and the oracle gates results.
 
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in

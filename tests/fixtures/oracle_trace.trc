@@ -20,7 +20,15 @@ INSERT INTO events (note) VALUES ('from_oracle')
 END OF STMT
 EXEC #140003:c=410,e=2100,p=0,cr=1,cu=3,mis=0,r=1,dep=0,og=1,plh=33,tim=1003400
 =====================
-PARSING IN CURSOR #140004 len=58 dep=0 uid=84 oct=6 lid=84 tim=1004000 hv=444 ad='7f04' sqlid='u9p0d1'
-UPDATE products SET price = NVL(price, 0) + 7 WHERE id = 2
+PARSING IN CURSOR #140004 len=55 dep=0 uid=84 oct=6 lid=84 tim=1004000 hv=444 ad='7f04' sqlid='u9p0d1'
+UPDATE products SET price = NVL(:1, 0) + 7 WHERE id = :2
 END OF STMT
+PARSE #140004:c=10,e=20,p=0,cr=0,cu=0,mis=1,r=0,dep=0,og=1,plh=0,tim=1004000
+BINDS #140004:
+ Bind#0
+  oacdty=02 mxl=22(22) mxlc=00 mal=00 scl=00 pre=00
+  value=100
+ Bind#1
+  oacdty=02 mxl=22(22) mxlc=00 mal=00 scl=00 pre=00
+  value=2
 EXEC #140004:c=380,e=1800,p=0,cr=2,cu=2,mis=0,r=1,dep=0,og=1,plh=44,tim=1004500

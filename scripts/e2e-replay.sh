@@ -128,7 +128,9 @@ $BIN capture --source-type oracle-trace --source-log tests/fixtures/oracle_trace
 if PG_RETEST_SQLGLOT_PYTHON="$SQLGLOT_PY" $BIN oracle-replay --input "$TMP/O.wkl" --output "$TMP/O_pg.wkl" --verify syntactic >/dev/null 2>&1 && [ -f "$TMP/O_pg.wkl" ]; then
   $BIN replay --workload "$TMP/O_pg.wkl" --target "$TGT" --output "$TMP/O_res.wkl" >/dev/null 2>&1
   check "D Oracle NVL→COALESCE replayed" "$(sql_tgt "SELECT note FROM events")" "from_oracle"
-  check "D Oracle UPDATE replayed"        "$(sql_tgt 'SELECT price FROM products WHERE id=2')" "57"
+  # Bound UPDATE: price = NVL(:1,0)+7 with :1=100 → 107 (proves bind substitution AND
+  # NVL→COALESCE AND replay; if binds didn't resolve, the :1/:2 would fail on replay).
+  check "D Oracle bind-substituted UPDATE replayed" "$(sql_tgt 'SELECT price FROM products WHERE id=2')" "107"
   # Note: Oracle SQL sqlglot can't translate (e.g. ROWNUM) is behaviorally rejected by
   # --verify live, not shipped — honest coverage, not silent breakage.
 else

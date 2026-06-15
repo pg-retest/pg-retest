@@ -169,7 +169,9 @@ parses it into a workload (`source_dialect = Oracle`); top-level statements only
 (recursive data-dictionary SQL is filtered). `oracle-replay` is dialect-aware: an Oracle
 workload is translated by sqlglot (`read='oracle'`), and anything sqlglot can't faithfully
 translate (e.g. `ROWNUM`) is behaviorally rejected by `--verify live`, never shipped.
-Bind-value substitution from `BINDS` sections is a follow-on.
+**Bind variables are substituted** from the trace's `BINDS` sections — `WHERE id = :1`
+with `value=42` becomes `WHERE id = 42` (numbers pass through; strings become quoted
+literals) — so bind-heavy OLTP traces replay faithfully.
 
 ```bash
 pg-retest capture --source-type oracle-trace --source-log orcl_ora_12345.trc --output ora.wkl

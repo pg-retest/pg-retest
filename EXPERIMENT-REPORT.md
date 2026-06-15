@@ -444,7 +444,15 @@ rejected by `--verify live`, never shipped.
 A PG→PG (csv)  B PG→PG (proxy)  C MySQL→PG  D Oracle→PG  E scale 3  F oracle-replay
 ```
 
-**Phase 2h (next):** Oracle bind-variable substitution (from `BINDS` sections),
-richer per-cell normalization (float/decimal tolerance, timezones), transaction-aware
-skipping (FR-XFORM-8), an `ON CONFLICT` upsert via the LLM generator, and an AWR/`V$SQL`
-extract capture source (the easy-to-produce Oracle alternative).
+**Phase 2h — Oracle bind-variable substitution (built, 2026-06-15).** The 10046 trace
+parser now reads `BINDS` sections and substitutes bind placeholders positionally
+(`WHERE id = :1` + `value=42` → `WHERE id = 42`; numbers pass through, strings become
+quoted literals with `''` escaping). Proven in `scripts/e2e-replay.sh` scenario D: a bound
+`UPDATE price = NVL(:1,0)+7` with `:1=100` resolves to `COALESCE(100,0)+7 = 107` on the
+target PG — bind substitution + Oracle→PG translation + replay, end to end. Heuristic
+(`:\w+`, not lexer-aware) so a `:NN` inside a string literal could be misread; the oracle
+gates the result. So bind-heavy OLTP Oracle traces now replay faithfully.
+
+**Phase 2i (next):** richer per-cell normalization (float/decimal tolerance, timezones),
+transaction-aware skipping (FR-XFORM-8), an `ON CONFLICT` upsert via the LLM generator,
+and an AWR/`V$SQL` extract capture source (the easy-to-produce Oracle alternative).
