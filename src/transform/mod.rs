@@ -4,6 +4,12 @@ pub mod mysql_to_pg;
 pub mod plan;
 pub mod planner;
 
+// Experimental AST-grade dialect transpiler (OFF by default). Spec FR-XFORM-5/9/12.
+#[cfg(feature = "polyglot-transform")]
+pub mod dialect;
+#[cfg(feature = "polyglot-transform")]
+pub mod polyglot;
+
 /// Result of transforming a single SQL statement.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransformResult {
