@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
+  MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in
+  behind the existing `SqlTransformer` trait as `PolyglotTransformer`. Strict
+  "translate-faithfully or flag-and-skip, never silently mistranslate" posture:
+  `TranspileOptions::strict()` + single-statement guard + a `pg_query` validity gate
+  that re-parses output with PostgreSQL's own parser and skips anything PG rejects. The
+  legacy 7-rule regex pipeline stays as a labelled fallback. Default build is unchanged
+  (PG-only; the dependency is `optional` and not linked). Branch
+  `experimental/polyglot-transform`; see `EXPERIMENT-REPORT.md`.
+- **P0 profile fields (additive, backward-compatible):** `WorkloadProfile.source_dialect`
+  (`SourceDialect` enum) and `Query.original_sql`, both `#[serde(default)]` and trailing
+  so existing `.wkl` files load unchanged. `mysql-slow` capture stamps `MySql`.
+- **`transform::is_valid_postgres()`** helper (libpg_query syntactic validity check),
+  plus `tests/polyglot_benefit_harness.rs` quantifying regex vs. transpiler honesty
+  (regex: 6 mistranslations on a 17-construct corpus; transpiler: 0).
+
 ## [1.0.0-rc.4] — 2026-04-22
 
 This release candidate completes the SQL parsing upgrade (shared `SqlLexer`
