@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Oracle-verified multi-pass translation (Phase 1, experimental, `polyglot-transform`).**
+  Translation by verified search: candidate generators (polyglot AST + regex) feed a
+  `GoldenOracle` that *executes* each candidate on a real PostgreSQL and diffs the result
+  against an author-verified reference — accepting only behavior-preserving candidates,
+  recording every attempt. Upgrades the transformer's guarantee from syntactic (PG parses
+  it) to behavioral (PG runs it and returns the right rows). `src/transform/oracle/`;
+  DB-gated via `PG_RETEST_ORACLE_URL` (skips cleanly without PostgreSQL). Benchmark
+  (`tests/oracle_translation_benchmark.rs`) on PG 16: the engine picks the right engine
+  per query — polyglot wins the string-literal case (regex corrupts it); regex wins
+  `IF()`→`CASE` (polyglot's passthrough parses but fails on execution, which the
+  behavioral oracle catches and the syntactic gate did not). Design/plan in
+  `docs/superpowers/{specs,plans}/2026-06-15-oracle-verified-translation*`.
+
 - **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
   MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in
   behind the existing `SqlTransformer` trait as `PolyglotTransformer`. Strict

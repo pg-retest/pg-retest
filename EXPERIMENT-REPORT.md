@@ -263,10 +263,57 @@ either:
    transaction-aware skip (drop the whole transaction when any statement is skipped —
    FR-XFORM-8), provenance label + `original_sql` retention through capture, and
    `source_dialect`/skip-count surfacing in `inspect`/`compare` (FR-XFORM-13).
-4. **Differential-oracle harness** (`retest-research/plan/reimplement/03-…`): replace
-   this bespoke benefit harness with pg-retest's own compare machinery — transform a
-   MySQL workload, replay on a containerized PG, diff vs. a reference — to validate
-   *behavior*, not just syntax.
+4. **Differential-oracle harness** (`retest-research/plan/reimplement/03-…`): validate
+   *behavior*, not just syntax. **→ Phase 1 of this is now built — see §9.**
 5. **Multi-dialect:** add `dialect-oracle`/`-tsql`/`-snowflake` features + capture
    sources to unlock Oracle/SQL-Server/Snowflake → PG "for free" through the same seam.
 ```
+
+## 9. Update — oracle-verified multi-pass translation (Phase 1, 2026-06-15)
+
+Next-step #4 is now realized as a first slice. Translation became **verified search**:
+candidate generators feed a **differential oracle** that *executes* each candidate on a
+real PostgreSQL and diffs the result against an author-verified reference, accepting
+only behavior-preserving candidates. This upgrades the guarantee from **syntactic** (the
+`pg_query` parse gate) to **behavioral** (PostgreSQL runs it and returns the right rows).
+
+- **Code:** `src/transform/oracle/{mod,normalize,engine,golden,corpus}.rs` (feature-gated
+  `polyglot-transform`). `Verdict` = `Equivalent | Divergent | Error`; the engine
+  cascades generators cheapest-first and accepts the first `Equivalent`, recording every
+  attempt. `GoldenOracle` wraps each query as `SELECT _s::text FROM (sql) _s` so PG
+  renders rows positionally — type- and column-name-agnostic, no per-type extraction.
+- **Truth** = the author-verified correct PG translation (`corpus.toml`), run live on the
+  seeded PG. No stored result blobs. Live-MySQL differential is Phase 2.
+- **Gating:** `PG_RETEST_ORACLE_URL` (default local); every DB test skips cleanly with no
+  PostgreSQL, so CI stays green.
+
+**Benchmark, run on PostgreSQL 16 (real output):**
+
+```
+  case                 | verified | winner   | runners-up verdicts
+  --------------------------------------------------------------------------
+  ifnull_coalesce      | yes      | polyglot |
+  backticks            | yes      | polyglot |
+  limit_offset         | yes      | polyglot |
+  string_literal_if    | yes      | polyglot |
+  if_function          | yes      | regex    | polyglot=Error { detail: "db error" }
+  wins by method: {"polyglot": 4, "regex": 1}   unverifiable/skipped: 0
+```
+
+**Why this is the whole argument for behavioral verification:** `if_function` —
+polyglot's `IF(...)` passthrough **passed the syntactic `pg_query` gate** (PG's parser
+accepts it as a function call) so the shipped transformer would have called it
+"Transformed/valid", but on **execution** PostgreSQL errored (no `IF` function) →
+`Error` → polyglot declined → the engine fell through to regex, which correctly emits
+`CASE`. On `string_literal_if` the roles reverse (regex corrupts the literal, polyglot
+preserves it). **Neither engine alone is correct across both queries; the oracle picks
+the right one per query** — proven by execution, not asserted.
+
+**Tests:** 14 oracle unit tests + 4 PG-gated integration tests + the benchmark; clippy
+clean and suite green with the feature OFF and ON. **Spec/plan:**
+`docs/superpowers/{specs,plans}/2026-06-15-oracle-verified-translation*`.
+
+**Phase 2 (next):** add the **LLM** and **sqlglot-subprocess** generators (both
+oracle-verified, so safe despite nondeterminism / a Python dep), the **live-MySQL
+differential** oracle, and **writes/DML** (table-state comparison). Richer per-cell
+normalization (float tolerance, timezones) lands when a corpus case needs it.
