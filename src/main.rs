@@ -203,8 +203,34 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
             })?;
             OracleAwrCapture.capture_from_file(source_log, &args.source_host)?
         }
+        "mssql-trace" => {
+            use pg_retest::capture::mssql_trace::MssqlTraceCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for mssql-trace capture")
+            })?;
+            MssqlTraceCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        "mssql-querystore" => {
+            use pg_retest::capture::mssql_querystore::MssqlQueryStoreCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--source-log is required for mssql-querystore capture (a CSV extract)"
+                )
+            })?;
+            MssqlQueryStoreCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        "mssql-xevents" => {
+            use pg_retest::capture::mssql_xevents::MssqlXEventsCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--source-log is required for mssql-xevents capture (an XML export)"
+                )
+            })?;
+            MssqlXEventsCapture.capture_from_file(source_log, &args.source_host)?
+        }
         other => anyhow::bail!(
-            "Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds, oracle-trace, oracle-awr"
+            "Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds, oracle-trace, \
+             oracle-awr, mssql-trace, mssql-querystore, mssql-xevents"
         ),
     };
 

@@ -1,6 +1,6 @@
 # Capture Methods
 
-pg-retest supports four capture backends for recording database workloads. Each backend produces the same `.wkl` workload profile format, which can then be replayed, compared, and analyzed using the rest of the tool.
+pg-retest supports several capture backends for recording database workloads. Each backend produces the same `.wkl` workload profile format, which can then be replayed, compared, and analyzed using the rest of the tool.
 
 The capture backends are:
 
@@ -8,7 +8,8 @@ The capture backends are:
 2. [Proxy Capture](#proxy-capture) -- Intercept live traffic via PG wire protocol proxy
 3. [MySQL Slow Log Capture](#mysql-slow-log-capture) -- Parse MySQL slow query logs with automatic SQL transformation
 4. [RDS/Aurora Capture](#rdsaurora-capture) -- Download and parse logs from AWS RDS/Aurora instances
-5. [PII Masking](#pii-masking) -- Mask sensitive values across any capture method
+5. [SQL Server Capture](#sql-server-capture) -- Parse an offline export from Profiler, Query Store, or Extended Events
+6. [PII Masking](#pii-masking) -- Mask sensitive values across any capture method
 
 ---
 
@@ -475,6 +476,117 @@ Captured 1542 queries across 23 sessions
 ### Listing Available Log Files
 
 If you omit `--rds-log-file`, pg-retest calls `aws rds describe-db-log-files` to list all available log files for the instance, then selects the one with the most recent `LastWritten` timestamp.
+
+---
+
+## SQL Server Capture
+
+pg-retest **never connects to SQL Server** -- a DBA exports one of three offline formats and uploads the file (CLI `pg-retest capture` or the web dashboard's Workloads → Upload Log). All three stamp the workload's origin dialect as SQL Server, and all three are read-only: no ODBC/native client library, no live connection, no credentials needed by pg-retest.
+
+Pick a format based on what you already have and how faithful a replay you need:
+
+| Format | Source type | Fidelity | Effort to produce |
+|---|---|---|---|
+| [Profiler Trace Table](#profiler-trace-table-capture) | `mssql-trace` | High -- literal SQL, real per-session ordering | Legacy; requires `fn_trace_gettable` or a running Profiler trace |
+| [Query Store Extract](#query-store-extract-capture) | `mssql-querystore` | Summary only -- parameterized SQL, no ordering | Lowest; one query against catalog views |
+| [Extended Events](#extended-events-capture) | `mssql-xevents` | High -- literal SQL, real per-session ordering | Modern; requires an XEvents session or ring-buffer read |
+
+### Profiler Trace Table Capture
+
+**Source type:** `--source-type mssql-trace`
+
+SQL Server Profiler (and its underlying `.trc` trace file format) is deprecated as of SQL Server 2012 and has no public binary spec, so pg-retest can't parse a raw `.trc` file directly. The standard workaround -- used by every third-party tool in this space -- is to load the trace into a table, then export that table to CSV:
+
+```sql
+-- Load a .trc file (or a live trace) into a table:
+SELECT * INTO my_trace FROM ::fn_trace_gettable('C:\traces\capture.trc', default);
+-- Then export my_trace to CSV (SSMS: right-click > Export Data, or bcp/sqlcmd).
+```
+
+Or use Profiler's GUI: run a trace, then **File > Save As > Trace Table**, and export that table to CSV the same way.
+
+Required and optional columns (matched case-insensitively):
+
+| Column | Required | Purpose |
+|---|---|---|
+| `TextData` | Yes | The SQL command text |
+| `Duration` | No | Microseconds -- Profiler's GUI displays milliseconds, but the value written to a table or file is always microseconds |
+| `StartTime` | No | Real per-session ordering (`YYYY-MM-DD HH:MM:SS.mmm`, or ISO 8601) |
+| `SPID` | No | Session grouping -- SQL Server's connection identifier |
+| `DatabaseName` | No | Stored on the session |
+| `LoginName` | No | Stored on the session |
+| `EventClass` | No | If present, rows are filtered to completed batches/RPCs only (`10`/`RPC:Completed`, `12`/`SQL:BatchCompleted`). Without this column, every row is accepted as-is. |
+
+```bash
+pg-retest capture \
+  --source-log /path/to/trace_export.csv \
+  --source-type mssql-trace \
+  --source-host mssql-prod-01 \
+  --output mssql-trace-workload.wkl
+```
+
+Because Profiler captures literal SQL text (no bind placeholders to resolve, unlike Oracle's shared-cursor model), this source is suitable for faithful OLTP replay when `StartTime`/`SPID` are present. Without them, every row lands in one flat session in file order.
+
+### Query Store Extract Capture
+
+**Source type:** `--source-type mssql-querystore`
+
+The easiest SQL Server source to produce: one join query against the built-in Query Store catalog views, exported to CSV.
+
+```sql
+SELECT qt.query_sql_text, rs.count_executions, rs.avg_duration
+FROM sys.query_store_query_text qt
+JOIN sys.query_store_query q ON q.query_text_id = qt.query_text_id
+JOIN sys.query_store_plan p ON p.query_id = q.query_id
+JOIN sys.query_store_runtime_stats rs ON rs.plan_id = p.plan_id
+ORDER BY rs.count_executions DESC;
+```
+
+Requires a `query_sql_text` column (case-insensitive alias `sql_text` also accepted); an `avg_duration`/`last_duration` column adds timing -- Query Store reports these in microseconds already, so no unit conversion is applied.
+
+```bash
+pg-retest capture \
+  --source-log /path/to/querystore_extract.csv \
+  --source-type mssql-querystore \
+  --source-host mssql-prod-01 \
+  --output mssql-querystore-workload.wkl
+```
+
+**Fidelity tradeoff:** a Query Store extract is a *summary* -- distinct query shapes and their aggregate timing, not an ordered, bound statement stream. Query Store normalizes literals into parameters, so most captured SQL is parameterized (`WHERE id = @0`) with no parameter values available -- those statements are skipped on replay. Use this for breadth of SQL shapes and reporting/ad-hoc queries; use Profiler trace-table or Extended Events capture for faithful OLTP replay.
+
+### Extended Events Capture
+
+**Source type:** `--source-type mssql-xevents`
+
+Extended Events (XEvents) is the modern replacement for Profiler. pg-retest accepts an XML export of either shape:
+
+- A ring-buffer dump: `SELECT CAST(target_data AS XML) FROM sys.dm_xe_session_targets WHERE target_name = 'ring_buffer'` (produces a `<RingBufferTarget>` wrapper containing many `<event>` elements)
+- A file-target read: `SELECT CAST(event_data AS XML) FROM sys.fn_xe_file_target_read_file('capture*.xel', null, null, null)` (one `<event>` fragment per row)
+
+The surrounding wrapper doesn't matter -- pg-retest scans for `<event>` elements wherever they appear, so either shape (or a bare sequence of `<event>` fragments with no wrapper at all) works.
+
+Only "completed" events carry a real SQL text + duration; everything else (logins, waits, attentions, etc.) is silently skipped:
+
+| Event name | SQL text field |
+|---|---|
+| `sql_batch_completed` | `batch_text` |
+| `rpc_completed` | `statement` |
+| `sql_statement_completed` | `statement` |
+| `sp_statement_completed` | `statement` |
+
+`duration` is always in microseconds (Extended Events has no GUI-vs-table unit split like Profiler). Session grouping uses the `session_id` action if the session captured it; otherwise every event falls into session `0`.
+
+```bash
+pg-retest capture \
+  --source-log /path/to/xevents_export.xml \
+  --source-type mssql-xevents \
+  --source-host mssql-prod-01 \
+  --output mssql-xevents-workload.wkl
+```
+
+### Capturing via the Web Dashboard
+
+All three SQL Server formats are also available from Workloads → **Upload Log** in the web dashboard: pick the matching Source Type from the dropdown, choose the exported file, and upload. This calls the same parsers as the CLI.
 
 ---
 

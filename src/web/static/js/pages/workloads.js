@@ -153,6 +153,11 @@ function workloadUploadModal(mode) {
                 <select class="input" name="source_type">
                     <option value="pg-csv">PostgreSQL CSV Log</option>
                     <option value="mysql-slow">MySQL Slow Log</option>
+                    <option value="oracle-trace">Oracle SQL Trace (10046 .trc)</option>
+                    <option value="oracle-awr">Oracle AWR/V$SQL Extract (CSV)</option>
+                    <option value="mssql-trace">SQL Server Profiler Trace Table (CSV)</option>
+                    <option value="mssql-querystore">SQL Server Query Store Extract (CSV)</option>
+                    <option value="mssql-xevents">SQL Server Extended Events (XML)</option>
                 </select>
             </div>
             <div>

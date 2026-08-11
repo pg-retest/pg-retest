@@ -201,6 +201,36 @@ pub async fn upload_workload(
                 .capture_from_file(&log_path, &source_host, true)
                 .map_err(|_| StatusCode::BAD_REQUEST)?
         }
+        "oracle-trace" => {
+            use crate::capture::oracle_trace::OracleTraceCapture;
+            OracleTraceCapture
+                .capture_from_file(&log_path, &source_host)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+        }
+        "oracle-awr" => {
+            use crate::capture::oracle_awr::OracleAwrCapture;
+            OracleAwrCapture
+                .capture_from_file(&log_path, &source_host)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+        }
+        "mssql-trace" => {
+            use crate::capture::mssql_trace::MssqlTraceCapture;
+            MssqlTraceCapture
+                .capture_from_file(&log_path, &source_host)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+        }
+        "mssql-querystore" => {
+            use crate::capture::mssql_querystore::MssqlQueryStoreCapture;
+            MssqlQueryStoreCapture
+                .capture_from_file(&log_path, &source_host)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+        }
+        "mssql-xevents" => {
+            use crate::capture::mssql_xevents::MssqlXEventsCapture;
+            MssqlXEventsCapture
+                .capture_from_file(&log_path, &source_host)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+        }
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 

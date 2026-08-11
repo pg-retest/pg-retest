@@ -152,6 +152,7 @@ flowchart TB
         PROXY[Wire Protocol Proxy]
         MYSQL[MySQL Slow Log]
         RDS[AWS RDS/Aurora]
+        MSSQL[SQL Server<br/>Trace/Query Store/XEvents]
     end
 
     subgraph Core["Core Engine"]
@@ -185,6 +186,7 @@ flowchart TB
     PROXY --> WKL
     MYSQL --> WKL
     RDS --> WKL
+    MSSQL --> WKL
     WKL --> REPLAY
     WKL --> CLASSIFY
     REPLAY --> COMPARE
@@ -205,6 +207,7 @@ flowchart TB
     style PROXY fill:#336791,stroke:#333,color:#fff
     style MYSQL fill:#4479a1,stroke:#333,color:#fff
     style RDS fill:#ff9900,stroke:#333,color:#fff
+    style MSSQL fill:#a91d22,stroke:#333,color:#fff
     style WKL fill:#2e7d32,stroke:#333,color:#fff
     style REPLAY fill:#1565c0,stroke:#333,color:#fff
     style TUNER fill:#7b1fa2,stroke:#333,color:#fff
@@ -239,7 +242,7 @@ sequenceDiagram
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-source capture** | PG CSV logs, wire protocol proxy, MySQL slow logs, AWS RDS/Aurora |
+| **Multi-source capture** | PG CSV logs, wire protocol proxy, MySQL slow logs, AWS RDS/Aurora, SQL Server (Profiler trace, Query Store, Extended Events) |
 | **Transaction-aware replay** | BEGIN/COMMIT/ROLLBACK boundaries, auto-rollback on failure |
 | **Read-only mode** | Strip DML for safe replay against production replicas |
 | **Speed control** | Compress or stretch inter-query timing (0.1x to 10x) |
@@ -265,7 +268,7 @@ sequenceDiagram
 
 | Command | Description |
 |---------|-------------|
-| `capture` | Capture workload from PostgreSQL logs, MySQL logs, or RDS |
+| `capture` | Capture workload from PostgreSQL logs, MySQL logs, RDS, or a SQL Server export |
 | `replay` | Replay a captured workload against a target database |
 | `compare` | Compare source workload with replay results |
 | `inspect` | Inspect a workload profile (optionally with classification) |
@@ -282,7 +285,7 @@ sequenceDiagram
 
 ## Capture Methods
 
-pg-retest supports four capture backends. All produce the same `.wkl` workload profile format.
+pg-retest supports several capture backends. All produce the same `.wkl` workload profile format.
 
 ```mermaid
 graph TD
@@ -291,12 +294,14 @@ graph TD
         B[Wire Protocol Proxy<br/><code>pg-retest proxy</code>]
         C[MySQL Slow Log<br/><code>--source-type mysql-slow</code>]
         D[AWS RDS/Aurora<br/><code>--source-type rds</code>]
+        G[SQL Server Trace/Query Store/XEvents<br/><code>--source-type mssql-*</code>]
     end
 
     A --> E[(workload.wkl)]
     B --> E
     C --> E
     D --> E
+    G --> E
 
     E --> F[Replay / Compare / Transform / Tune]
 
@@ -468,6 +473,23 @@ pg-retest capture \
 ```
 
 Requires the `aws` CLI to be installed and configured with appropriate IAM permissions. If `--rds-log-file` is omitted, the most recent log file is used. Large log files (>1MB) are downloaded in paginated chunks.
+
+### SQL Server Capture
+
+pg-retest never connects to SQL Server -- a DBA exports one of three offline formats and uploads the file (CLI or the web dashboard's Workloads → Upload Log).
+
+```bash
+# Profiler trace table (legacy): export via fn_trace_gettable or "Save As Trace Table"
+pg-retest capture --source-type mssql-trace --source-log trace_export.csv --output workload.wkl
+
+# Query Store extract (easiest): one join query against sys.query_store_* views
+pg-retest capture --source-type mssql-querystore --source-log querystore_extract.csv --output workload.wkl
+
+# Extended Events (modern): ring-buffer or file-target XML export
+pg-retest capture --source-type mssql-xevents --source-log xevents_export.xml --output workload.wkl
+```
+
+Profiler trace-table and Extended Events capture literal SQL text with real per-session ordering (`SPID`/`session_id`), suitable for faithful OLTP replay. Query Store is a parameterized summary (`WHERE id = @0`, no bound values) -- good for breadth of SQL shapes, not exact replay. See [SQL Server Capture](docs/capture.md#sql-server-capture) for export steps, required columns/fields, and full fidelity tradeoffs.
 
 ---
 
