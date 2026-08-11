@@ -21,6 +21,7 @@ csv = "1"
 futures-util = "0.3"
 mime_guess = "2"
 pg_query = "6"
+quick-xml = "0.41"
 rand = "0.8"
 rmp-serde = "1"
 regex = "1"
@@ -48,6 +49,16 @@ rustls-pemfile = "2"
 rustls-native-certs = "0.8"
 dashmap = "6"
 socket2 = { version = "0.5", features = ["all"] }
+# Experimental AST-grade SQL dialect transpiler (MIT). OFF by default — only
+# compiled with `--features polyglot-transform`. Published crates.io crate
+# (no local path override) — default-features = false to avoid the heavy
+# all-dialects/semantic stack; lean MySQL→PostgreSQL feature set.
+# Spec: retest-research/plan/include/polyglot-sql-transform.md §3 (FR-XFORM-4).
+polyglot-sql = { version = "=0.5.4", default-features = false, features = [
+    "transpile",
+    "dialect-postgresql",
+    "dialect-mysql",
+], optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
@@ -56,6 +67,9 @@ rcgen = "0.13"
 
 [features]
 legacy-returning = []
+# Experimental: AST-grade SQL dialect transpilation via the polyglot-sql crate,
+# behind the existing SqlTransformer trait. OFF by default. Spec FR-XFORM-4.
+polyglot-transform = ["dep:polyglot-sql"]
 
 [[bench]]
 name = "substitute_bench"

@@ -162,6 +162,7 @@ function goldenPathPage() {
                 this.stepLoading[1] = false;
                 return;
             }
+            ConnHistory.remember(this.targetConn);
             this.proxyStatus = { running: true };
             this.stepLoading[1] = false;
         },
@@ -275,6 +276,7 @@ function goldenPathPage() {
                 this.stepLoading[4] = false;
                 return;
             }
+            ConnHistory.remember(this.targetConn);
             this.replayRunId = res.run_id || res.id;
             // Progress tracked via WS — stepComplete[4] set when ReplayCompleted fires
         },
@@ -320,6 +322,8 @@ function goldenPathPage() {
                 return;
             }
 
+            ConnHistory.remember(this.driftDbA);
+            ConnHistory.remember(this.driftDbB);
             this.driftResults = res;
             this.stepComplete[6] = true;
             this.stepLoading[6] = false;
@@ -347,6 +351,7 @@ function goldenPathPage() {
                 return;
             }
 
+            if (this.sourceConn) ConnHistory.remember(this.sourceConn);
             this.syntheticWorkloadId = res.workload_id || res.id;
             this.syntheticDataPath = res.data_sql_path || res.data_path || '';
             this.syntheticStats = res;

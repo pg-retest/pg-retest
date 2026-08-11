@@ -1,0 +1,4 @@
+sql_text,executions,elapsed_us
+"SELECT NVL(name, 'unknown') FROM products WHERE id = 1",250,1200
+"INSERT INTO events (note) VALUES ('awr_origin')",10,600
+"UPDATE products SET price = price + 3 WHERE id = 1",30,900

@@ -7,6 +7,7 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
     let total_queries = sessions.iter().map(|s| s.queries.len() as u64).sum();
     let total_sessions = sessions.len() as u64;
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "test".into(),
@@ -30,6 +31,7 @@ fn test_scale_sessions_1x_returns_original() {
         user: "app".into(),
         database: "db".into(),
         queries: vec![Query {
+            original_sql: None,
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -52,6 +54,7 @@ fn test_scale_sessions_3x() {
             user: "app".into(),
             database: "db".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -65,6 +68,7 @@ fn test_scale_sessions_3x() {
             user: "admin".into(),
             database: "db".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "SELECT 2".into(),
                 start_offset_us: 0,
                 duration_us: 200,
@@ -97,6 +101,7 @@ fn test_scale_sessions_stagger() {
         database: "db".into(),
         queries: vec![
             Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -105,6 +110,7 @@ fn test_scale_sessions_stagger() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT 2".into(),
                 start_offset_us: 1000,
                 duration_us: 100,
@@ -133,6 +139,7 @@ fn test_check_write_safety_no_writes() {
         user: "app".into(),
         database: "db".into(),
         queries: vec![Query {
+            original_sql: None,
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -153,6 +160,7 @@ fn test_check_write_safety_with_writes() {
         database: "db".into(),
         queries: vec![
             Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -161,6 +169,7 @@ fn test_check_write_safety_with_writes() {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t VALUES (1)".into(),
                 start_offset_us: 100,
                 duration_us: 200,

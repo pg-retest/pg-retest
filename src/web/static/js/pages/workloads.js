@@ -85,7 +85,7 @@ function workloadsPage() {
                             <div class="space-y-4">
                                 <div>
                                     <label class="label">Source DB Connection String <span class="text-danger">*</span></label>
-                                    <input class="input" name="source_db" required
+                                    <input class="input" name="source_db" required list="conn-history-list"
                                            placeholder="host=localhost dbname=mydb user=postgres password=...">
                                 </div>
                                 <div class="grid grid-cols-3 gap-3">
@@ -153,6 +153,11 @@ function workloadUploadModal(mode) {
                 <select class="input" name="source_type">
                     <option value="pg-csv">PostgreSQL CSV Log</option>
                     <option value="mysql-slow">MySQL Slow Log</option>
+                    <option value="oracle-trace">Oracle SQL Trace (10046 .trc)</option>
+                    <option value="oracle-awr">Oracle AWR/V$SQL Extract (CSV)</option>
+                    <option value="mssql-trace">SQL Server Profiler Trace Table (CSV)</option>
+                    <option value="mssql-querystore">SQL Server Query Store Extract (CSV)</option>
+                    <option value="mssql-xevents">SQL Server Extended Events (XML)</option>
                 </select>
             </div>
             <div>
@@ -354,6 +359,7 @@ async function handleSynthesize(e) {
     if (res.error) {
         statusEl.innerHTML = Status.error(res.error);
     } else {
+        ConnHistory.remember(config.source_db);
         statusEl.innerHTML = `
             <div class="rounded-md bg-accent/10 border border-accent/20 p-3 text-sm">
                 <div class="text-accent font-medium mb-1">Synthesis complete</div>

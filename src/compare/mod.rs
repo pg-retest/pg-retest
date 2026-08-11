@@ -174,6 +174,7 @@ mod tests {
     fn test_filtered_percentiles_read_only_mode() {
         // Source has 3 SELECTs and 2 DML queries
         let source = WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: Utc::now(),
             source_host: "src".into(),
@@ -185,6 +186,7 @@ mod tests {
                 database: "db".into(),
                 queries: vec![
                     Query {
+                        original_sql: None,
                         sql: "SELECT 1".into(),
                         start_offset_us: 0,
                         duration_us: 100,
@@ -193,6 +195,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "INSERT INTO t VALUES (1)".into(),
                         start_offset_us: 200,
                         duration_us: 9000,
@@ -201,6 +204,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "SELECT 2".into(),
                         start_offset_us: 400,
                         duration_us: 200,
@@ -209,6 +213,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "UPDATE t SET x=1".into(),
                         start_offset_us: 600,
                         duration_us: 8000,
@@ -217,6 +222,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "SELECT 3".into(),
                         start_offset_us: 800,
                         duration_us: 300,

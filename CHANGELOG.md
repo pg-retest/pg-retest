@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Oracle-verified multi-pass translation (Phase 1, experimental, `polyglot-transform`).**
+  Translation by verified search: candidate generators (polyglot AST + regex) feed a
+  `GoldenOracle` that *executes* each candidate on a real PostgreSQL and diffs the result
+  against an author-verified reference — accepting only behavior-preserving candidates,
+  recording every attempt. Upgrades the transformer's guarantee from syntactic (PG parses
+  it) to behavioral (PG runs it and returns the right rows). `src/transform/oracle/`;
+  DB-gated via `PG_RETEST_ORACLE_URL` (skips cleanly without PostgreSQL). Benchmark
+  (`tests/oracle_translation_benchmark.rs`) on PG 16: the engine picks the right engine
+  per query — polyglot wins the string-literal case (regex corrupts it); regex wins
+  `IF()`→`CASE` (polyglot's passthrough parses but fails on execution, which the
+  behavioral oracle catches and the syntactic gate did not). Design/plan in
+  `docs/superpowers/{specs,plans}/2026-06-15-oracle-verified-translation*`.
+- **Oracle Phase 2a — heterogeneous generators + LLM (experimental).** Candidate
+  generators are now an async `CandidateGenerator` trait, so deterministic transpilers
+  and external/nondeterministic tools share one engine. Added an **LLM generator**
+  (`src/transform/oracle/llm.rs`; reqwest → any OpenAI-compatible endpoint; opt-in via
+  `PG_RETEST_LLM_URL`). The oracle makes it safe by construction — a wrong LLM
+  translation is rejected, never trusted — proven deterministically by a "flaky
+  generator" safety test and a mock-endpoint HTTP test (no live LLM required).
+- **Oracle Phase 2b — live-MySQL differential oracle (experimental).** The truest
+  oracle: `LiveDiffOracle` (`src/transform/oracle/live.rs`) runs the original query on a
+  real MySQL (via its CLI — no Rust driver dep; configured by `PG_RETEST_MYSQL_CMD`) and
+  the candidate on PostgreSQL, then diffs. Implements the same `Oracle` trait, so it drops
+  into the engine unchanged. Cross-engine result normalization (`parse_pg_record` /
+  `parse_mysql_row` in `normalize.rs`) reconciles record-text vs TSV and NULL-vs-`''`,
+  guarded by 6 unit tests. Proven on real MySQL 8.0 + PostgreSQL 16
+  (`tests/oracle_live_mysql_test.rs`): all corpus translations behaviorally Equivalent to
+  their MySQL originals across the two engines; wrong candidate caught; the multi-pass
+  engine picks the right engine per query, verified by execution on both real engines.
+- **Oracle Phase 2c — sqlglot generator (experimental).** `SqlglotGenerator`
+  (`src/transform/oracle/sqlglot.rs`) invokes the mature Python `sqlglot` transpiler as a
+  subprocess (no Rust binding; Python via `PG_RETEST_SQLGLOT_PYTHON`, declines gracefully
+  if unavailable). More complete than the 0.5.4 Rust port — translates MySQL `IF()`→`CASE`
+  where polyglot passes it through. Proven on live PG (`tests/oracle_sqlglot_test.rs`,
+  sqlglot 30.11.0): in the `[polyglot, sqlglot]` cascade, polyglot's `IF()` passthrough is
+  rejected by the oracle on execution and sqlglot wins — added coverage, no engine change.
+- **Oracle Phase 2d — writes/DML oracle (experimental).** `LiveDiffOracle::verify_write`
+  verifies INSERT/UPDATE/DELETE translations by resulting TABLE STATE (a write returns no
+  rows): reset both engines, apply original on MySQL and candidate on PG, diff a state
+  query. Proven on real MySQL 8.0 + PostgreSQL 16 (`tests/oracle_writes_test.rs`): correct
+  UPDATE/DELETE Equivalent; a wrong-row candidate caught (Divergent); an untranslatable
+  `ON DUPLICATE KEY UPDATE` Errored (honestly skipped, never accepted); sqlglot's UPDATE
+  translation state-verified.
+- **Oracle Phase 2e — deep benchmark + operator guide (experimental).** A broad
+  23-construct MySQL corpus (`tests/fixtures/oracle/corpus_deep.toml`) run through every
+  generator and verified against real MySQL (`tests/oracle_deep_benchmark.rs`), producing a
+  per-construct × per-generator coverage matrix (regex 19/23, polyglot 21/23, sqlglot
+  23/23, multi-pass union 23/23). New operator guide
+  **`docs/oracle-verified-translation.md`**: how to enable the feature, every environment
+  variable, the PostgreSQL/MySQL/sqlglot/LLM setup, running each benchmark, and the
+  capture→translate→replay→compare workflow.
+- **Oracle Phase 2f — `oracle-replay` CLI command (experimental).** New feature-gated
+  subcommand that translates a captured MySQL `.wkl` to PostgreSQL through the multi-pass
+  verified-search engine: `pg-retest oracle-replay --input w.wkl --output t.wkl --verify
+  syntactic|live`. Retains `original_sql`, sets output `source_dialect = Postgres`, drops
+  unverifiable statements, prints an Oracle-Replay Report (per-winning-generator counts +
+  skip reasons); sqlglot/LLM join the cascade when configured. Library core
+  `transform::oracle::replay::translate_profile` (unit-tested, no DB); `SyntacticOracle`
+  added for DB-free syntactic acceptance. Default build unaffected.
+- **Oracle Phase 2g — Oracle SQL Trace capture + Oracle→PG path.** New
+  `--source-type oracle-trace` (`capture::oracle_trace`) parses uploaded Oracle event-10046
+  trace files into a workload (`source_dialect = Oracle`; top-level statements only,
+  recursive dictionary SQL filtered; `EXEC` timing). `SqlglotGenerator` parameterized by
+  read dialect (`for_dialect("oracle")`), and `oracle-replay` is now dialect-aware (Oracle
+  workloads translate via sqlglot `read='oracle'`). Proven end-to-end: Oracle trace →
+  capture → oracle-replay → replay on real PG (NVL→COALESCE + INSERT/UPDATE land on
+  target). pg-retest never connects to Oracle — DBAs enable 10046 tracing and upload the
+  `.trc`. `scripts/e2e-replay.sh` now validates all four capture paths (9 passed, 0 failed).
+- **Oracle Phase 2h — bind-variable substitution.** The 10046 trace parser reads `BINDS`
+  sections and substitutes bind placeholders positionally (`WHERE id = :1` + `value=42` →
+  `WHERE id = 42`; numbers pass through, strings become quoted literals with `''` escaping)
+  so bind-heavy OLTP traces replay faithfully. Proven in the e2e (scenario D): a bound
+  `UPDATE price = NVL(:1,0)+7` with `:1=100` lands as `107` on the target PG. Heuristic
+  (`:\w+`); a `:NN` inside a string literal could be misread, and the oracle gates results.
+- **Oracle Phase 2i — AWR/`V$SQL` extract capture.** New `--source-type oracle-awr`
+  (`capture::oracle_awr`) parses an uploaded CSV from `V$SQL`/AWR/`DBA_HIST_SQLTEXT`
+  (a `sql_text` column + optional `executions`/`elapsed_us`) — the easiest Oracle source for
+  a DBA to produce (one query → export). Proven in the e2e (scenario G; 11 passed, 0 failed).
+  Honest tradeoff: a summary (distinct SQL shapes, no bind values), so parameterized SQL
+  skips on replay; use `oracle-trace` for faithful OLTP. Five capture sources now feed one
+  replay engine (pg-csv, mysql-slow, rds, oracle-trace, oracle-awr).
+
+- **Experimental `polyglot-transform` Cargo feature (OFF by default)** — AST-grade
+  MySQL→PostgreSQL dialect transpilation via the MIT `polyglot-sql` crate, plugged in
+  behind the existing `SqlTransformer` trait as `PolyglotTransformer`. Strict
+  "translate-faithfully or flag-and-skip, never silently mistranslate" posture:
+  `TranspileOptions::strict()` + single-statement guard + a `pg_query` validity gate
+  that re-parses output with PostgreSQL's own parser and skips anything PG rejects. The
+  legacy 7-rule regex pipeline stays as a labelled fallback. Default build is unchanged
+  (PG-only; the dependency is `optional` and not linked). Branch
+  `experimental/polyglot-transform`; see `EXPERIMENT-REPORT.md`.
+- **P0 profile fields (additive, backward-compatible):** `WorkloadProfile.source_dialect`
+  (`SourceDialect` enum) and `Query.original_sql`, both `#[serde(default)]` and trailing
+  so existing `.wkl` files load unchanged. `mysql-slow` capture stamps `MySql`.
+- **`transform::is_valid_postgres()`** helper (libpg_query syntactic validity check),
+  plus `tests/polyglot_benefit_harness.rs` quantifying regex vs. transpiler honesty
+  (regex: 6 mistranslations on a 17-construct corpus; transpiler: 0).
+
 ## [1.0.0-rc.4] — 2026-04-22
 
 This release candidate completes the SQL parsing upgrade (shared `SqlLexer`

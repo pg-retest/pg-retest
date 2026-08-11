@@ -19,12 +19,12 @@ function driftPage() {
                     <div class="grid grid-cols-2 gap-4 mb-4">
                         <div>
                             <label class="label">DB-A Connection String</label>
-                            <input class="input" id="drift-db-a"
+                            <input class="input" id="drift-db-a" list="conn-history-list"
                                    placeholder="host=localhost dbname=source user=postgres password=...">
                         </div>
                         <div>
                             <label class="label">DB-B Connection String</label>
-                            <input class="input" id="drift-db-b"
+                            <input class="input" id="drift-db-b" list="conn-history-list"
                                    placeholder="host=localhost dbname=target user=postgres password=...">
                         </div>
                     </div>
@@ -58,6 +58,9 @@ async function runDriftCheck() {
         resultsEl.innerHTML = Status.error(res.error);
         return;
     }
+
+    ConnHistory.remember(dbA);
+    ConnHistory.remember(dbB);
 
     const tables = res.tables || [];
     const summary = res.summary || {};

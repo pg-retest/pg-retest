@@ -5,6 +5,7 @@ use pg_retest::replay::{QueryResult, ReplayMode, ReplayResults};
 fn test_replay_mode_read_only_filters_dml() {
     let queries = [
         Query {
+            original_sql: None,
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -13,6 +14,7 @@ fn test_replay_mode_read_only_filters_dml() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "INSERT INTO foo VALUES (1)".into(),
             start_offset_us: 500,
             duration_us: 200,
@@ -21,6 +23,7 @@ fn test_replay_mode_read_only_filters_dml() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "SELECT 2".into(),
             start_offset_us: 1000,
             duration_us: 150,
@@ -44,6 +47,7 @@ fn test_replay_mode_read_only_filters_dml() {
 fn test_replay_mode_read_write_keeps_all() {
     let queries = [
         Query {
+            original_sql: None,
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -52,6 +56,7 @@ fn test_replay_mode_read_write_keeps_all() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "INSERT INTO foo VALUES (1)".into(),
             start_offset_us: 500,
             duration_us: 200,
@@ -104,6 +109,7 @@ fn test_read_only_mode_filters_transaction_control() {
     // In read-only mode, BEGIN/COMMIT/ROLLBACK should be filtered out
     let queries = [
         Query {
+            original_sql: None,
             sql: "BEGIN".into(),
             start_offset_us: 0,
             duration_us: 10,
@@ -112,6 +118,7 @@ fn test_read_only_mode_filters_transaction_control() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "SELECT 1".into(),
             start_offset_us: 100,
             duration_us: 100,
@@ -120,6 +127,7 @@ fn test_read_only_mode_filters_transaction_control() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "UPDATE t SET x=1".into(),
             start_offset_us: 200,
             duration_us: 500,
@@ -128,6 +136,7 @@ fn test_read_only_mode_filters_transaction_control() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "COMMIT".into(),
             start_offset_us: 300,
             duration_us: 20,
@@ -150,6 +159,7 @@ fn test_read_only_mode_filters_transaction_control() {
 fn test_read_write_mode_keeps_transaction_control() {
     let queries = [
         Query {
+            original_sql: None,
             sql: "BEGIN".into(),
             start_offset_us: 0,
             duration_us: 10,
@@ -158,6 +168,7 @@ fn test_read_write_mode_keeps_transaction_control() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "UPDATE t SET x=1".into(),
             start_offset_us: 100,
             duration_us: 500,
@@ -166,6 +177,7 @@ fn test_read_write_mode_keeps_transaction_control() {
             response_values: None,
         },
         Query {
+            original_sql: None,
             sql: "COMMIT".into(),
             start_offset_us: 200,
             duration_us: 20,

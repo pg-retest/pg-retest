@@ -22,6 +22,7 @@ pub fn scale_sessions(profile: &WorkloadProfile, scale: u32, stagger_ms: u64) ->
                 .queries
                 .iter()
                 .map(|q| crate::profile::Query {
+                    original_sql: None,
                     sql: q.sql.clone(),
                     start_offset_us: q.start_offset_us + offset,
                     duration_us: q.duration_us,
@@ -125,6 +126,7 @@ pub fn scale_sessions_by_class(
                     .queries
                     .iter()
                     .map(|q| crate::profile::Query {
+                        original_sql: None,
                         sql: q.sql.clone(),
                         start_offset_us: q.start_offset_us + offset,
                         duration_us: q.duration_us,

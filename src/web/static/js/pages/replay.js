@@ -66,7 +66,7 @@ function replayPage() {
                             </div>
                             <div>
                                 <label class="label">Target Connection String</label>
-                                <input class="input" type="text" id="replay-target"
+                                <input class="input" type="text" id="replay-target" list="conn-history-list"
                                        placeholder="postgres://user:pass@host:5432/dbname">
                             </div>
                             <div class="grid grid-cols-3 gap-3">
@@ -168,6 +168,7 @@ async function startReplay() {
         document.getElementById('replay-start-btn').disabled = false;
         document.getElementById('replay-cancel-btn').disabled = true;
     } else {
+        ConnHistory.remember(target);
         window.showToast('Replay started', 'success');
         window._activeReplayTaskId = res.task_id;
     }

@@ -38,7 +38,121 @@ fn main() -> Result<()> {
         Commands::Tune(args) => cmd_tune(args),
         Commands::ProxyCtl(args) => cmd_proxy_ctl(args),
         Commands::Compile(args) => cmd_compile(args),
+        Commands::Connections(args) => cmd_connections(args),
+        #[cfg(feature = "polyglot-transform")]
+        Commands::OracleReplay(args) => cmd_oracle_replay(args),
     }
+}
+
+/// Translate a MySQL workload to PostgreSQL via the multi-pass, oracle-verified engine.
+#[cfg(feature = "polyglot-transform")]
+fn cmd_oracle_replay(args: pg_retest::cli::OracleReplayArgs) -> Result<()> {
+    use anyhow::anyhow;
+    use pg_retest::profile::io;
+    use pg_retest::profile::SourceDialect;
+    use pg_retest::transform::mysql_to_pg::mysql_to_pg_pipeline;
+    use pg_retest::transform::oracle::engine::{CandidateGenerator, PipelineGenerator};
+    use pg_retest::transform::oracle::golden::{conn_str, GoldenOracle};
+    use pg_retest::transform::oracle::live::LiveDiffOracle;
+    use pg_retest::transform::oracle::llm::LlmGenerator;
+    use pg_retest::transform::oracle::replay::translate_profile;
+    use pg_retest::transform::oracle::sqlglot::SqlglotGenerator;
+    use pg_retest::transform::oracle::SyntacticOracle;
+    use pg_retest::transform::polyglot::mysql_to_pg_polyglot_pipeline;
+
+    let profile = io::read_profile(&args.input)?;
+    info!(
+        "oracle-replay: {} ({} sessions), verify={}",
+        args.input.display(),
+        profile.sessions.len(),
+        args.verify
+    );
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let (translated, report) = rt.block_on(async {
+        // Generator fleet, chosen by the workload's origin dialect.
+        let mut generators: Vec<Box<dyn CandidateGenerator>> = Vec::new();
+        match profile.source_dialect {
+            SourceDialect::Oracle => {
+                // The deterministic Rust generators (regex, polyglot) are MySQL→PG only;
+                // Oracle goes through sqlglot (read='oracle').
+                let sg = SqlglotGenerator::for_dialect("oracle");
+                if sg.available().await {
+                    generators.push(Box::new(sg));
+                } else {
+                    warn!("Oracle workload but sqlglot is unavailable (set PG_RETEST_SQLGLOT_PYTHON) — nothing will translate.");
+                }
+            }
+            _ => {
+                // MySQL (default): regex + polyglot + sqlglot(mysql) + optional LLM.
+                generators.push(PipelineGenerator::boxed("regex", mysql_to_pg_pipeline()));
+                generators
+                    .push(PipelineGenerator::boxed("polyglot", mysql_to_pg_polyglot_pipeline()));
+                if SqlglotGenerator::from_env().available().await {
+                    generators.push(Box::new(SqlglotGenerator::from_env()));
+                }
+                if let Some(llm) = LlmGenerator::from_env() {
+                    generators.push(Box::new(llm));
+                }
+            }
+        }
+        info!(
+            "source_dialect={:?}, generators: {:?}",
+            profile.source_dialect,
+            generators.iter().map(|g| g.name()).collect::<Vec<_>>()
+        );
+
+        match args.verify.as_str() {
+            "live" => {
+                let argv = LiveDiffOracle::mysql_argv_from_env()
+                    .ok_or_else(|| anyhow!("--verify live needs PG_RETEST_MYSQL_CMD"))?;
+                let oracle = LiveDiffOracle::connect(&conn_str(), argv)
+                    .await
+                    .map_err(|e| anyhow!("live oracle connect: {e}"))?;
+                Ok::<_, anyhow::Error>(translate_profile(&profile, &generators, &oracle).await)
+            }
+            "golden" => {
+                // GoldenOracle here treats the original MySQL as the "reference" — only
+                // meaningful when the target PG is seeded to match. Mostly for testing.
+                let oracle = GoldenOracle::connect(&conn_str())
+                    .await
+                    .map_err(|e| anyhow!("golden oracle connect: {e}"))?;
+                Ok(translate_profile(&profile, &generators, &oracle).await)
+            }
+            _ => Ok(translate_profile(&profile, &generators, &SyntacticOracle).await),
+        }
+    })?;
+
+    io::write_profile(&args.output, &translated)?;
+
+    println!();
+    println!("  Oracle-Replay Report");
+    println!("  ====================");
+    println!("  Statements:   {}", report.total);
+    println!("  Translated:   {}", report.translated);
+    println!("  Skipped:      {}", report.skipped);
+    if !report.by_generator.is_empty() {
+        println!("  By generator:");
+        for (g, n) in &report.by_generator {
+            println!("    {g:<10} {n}");
+        }
+    }
+    if !report.skips.is_empty() {
+        println!("  Skipped statements (first 10):");
+        for (sql, reason) in report.skips.iter().take(10) {
+            println!("    - {sql}");
+            println!("      {reason}");
+        }
+    }
+    println!(
+        "  Wrote {} ({} statements)",
+        args.output.display(),
+        report.translated
+    );
+    if matches!(args.verify.as_str(), "syntactic") {
+        warn!("verify=syntactic proves PostgreSQL parses each translation, NOT behavior. Use --verify live (PG + MySQL) for a migration decision.");
+    }
+    Ok(())
 }
 
 fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
@@ -76,7 +190,49 @@ fn cmd_capture(args: pg_retest::cli::CaptureArgs) -> Result<()> {
                 &args.source_host,
             )?
         }
-        other => anyhow::bail!("Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds"),
+        "oracle-trace" => {
+            use pg_retest::capture::oracle_trace::OracleTraceCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for oracle-trace capture")
+            })?;
+            OracleTraceCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        "oracle-awr" => {
+            use pg_retest::capture::oracle_awr::OracleAwrCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for oracle-awr capture (a CSV extract)")
+            })?;
+            OracleAwrCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        "mssql-trace" => {
+            use pg_retest::capture::mssql_trace::MssqlTraceCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("--source-log is required for mssql-trace capture")
+            })?;
+            MssqlTraceCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        "mssql-querystore" => {
+            use pg_retest::capture::mssql_querystore::MssqlQueryStoreCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--source-log is required for mssql-querystore capture (a CSV extract)"
+                )
+            })?;
+            MssqlQueryStoreCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        "mssql-xevents" => {
+            use pg_retest::capture::mssql_xevents::MssqlXEventsCapture;
+            let source_log = args.source_log.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--source-log is required for mssql-xevents capture (an XML export)"
+                )
+            })?;
+            MssqlXEventsCapture.capture_from_file(source_log, &args.source_host)?
+        }
+        other => anyhow::bail!(
+            "Unknown source type: {other}. Supported: pg-csv, mysql-slow, rds, oracle-trace, \
+             oracle-awr, mssql-trace, mssql-querystore, mssql-xevents"
+        ),
     };
 
     if args.id_mode.needs_sequences() {
@@ -122,6 +278,7 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     } else {
         args.target.clone()
     };
+    let target = pg_retest::web::db::resolve_connection_string(&target, &args.data_dir)?;
 
     let profile = io::read_profile(&args.workload)?;
     let mode = if args.read_only {
@@ -399,6 +556,14 @@ fn cmd_inspect(args: pg_retest::cli::InspectArgs) -> Result<()> {
 
 fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
     use pg_retest::proxy::{run_proxy, ProxyConfig};
+
+    let mut args = args;
+    if let Some(ref s) = args.source_db {
+        args.source_db = Some(pg_retest::web::db::resolve_connection_string(
+            s,
+            &args.data_dir,
+        )?);
+    }
 
     let duration = args.duration.as_deref().map(parse_duration).transpose()?;
 
@@ -937,6 +1102,7 @@ fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
     } else {
         args.target.clone()
     };
+    let target = pg_retest::web::db::resolve_connection_string(&target, &args.data_dir)?;
 
     let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
     let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
@@ -1115,6 +1281,45 @@ fn cmd_compile(args: pg_retest::cli::CompileArgs) -> Result<()> {
         println!("(No --id-mode needed — IDs are pre-resolved for PITR + sequence reset)");
     } else {
         println!("\n(dry-run: no output written)");
+    }
+
+    Ok(())
+}
+
+fn cmd_connections(args: pg_retest::cli::ConnectionsArgs) -> Result<()> {
+    use pg_retest::cli::ConnectionsAction;
+    use pg_retest::web::db;
+
+    let conn = db::open_db(&args.data_dir)?;
+
+    match args.action {
+        ConnectionsAction::List => {
+            let connections = db::list_connections(&conn)?;
+            if connections.is_empty() {
+                println!(
+                    "No saved connections. Add one with: pg-retest connections add <label> <conn_string>"
+                );
+            } else {
+                println!("{:<24} CONNECTION STRING", "LABEL");
+                for c in connections {
+                    println!("{:<24} {}", c.label, c.conn_string);
+                }
+            }
+        }
+        ConnectionsAction::Add { label, conn_string } => {
+            db::upsert_connection(&conn, &label, &conn_string)?;
+            println!(
+                "Saved connection '{}'. Reference it elsewhere as @{}.",
+                label, label
+            );
+        }
+        ConnectionsAction::Rm { label } => {
+            if db::delete_connection_by_label(&conn, &label)? {
+                println!("Removed connection '{}'.", label);
+            } else {
+                anyhow::bail!("No saved connection named '{}'.", label);
+            }
+        }
     }
 
     Ok(())

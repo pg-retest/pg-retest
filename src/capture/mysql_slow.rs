@@ -7,7 +7,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use tracing::debug;
 
 use crate::profile::{
-    assign_transaction_ids, Metadata, Query, QueryKind, Session, WorkloadProfile,
+    assign_transaction_ids, Metadata, Query, QueryKind, Session, SourceDialect, WorkloadProfile,
 };
 use crate::transform::mysql_to_pg::mysql_to_pg_pipeline;
 use crate::transform::{TransformPipeline, TransformReport, TransformResult};
@@ -224,6 +224,7 @@ impl MysqlSlowLogCapture {
                     .num_microseconds()
                     .unwrap_or(0) as u64;
                 queries.push(Query {
+                    original_sql: None,
                     sql: sql.clone(),
                     start_offset_us: offset,
                     duration_us: entry.query_time_us,
@@ -262,6 +263,9 @@ impl MysqlSlowLogCapture {
 
         let total_sessions = sessions.len() as u64;
         Ok(WorkloadProfile {
+            // MySQL slow-log capture: stamp the origin dialect so the transform
+            // layer parses with the right grammar (FR-XFORM-12).
+            source_dialect: SourceDialect::MySql,
             version: 2,
             captured_at: Utc::now(),
             source_host: source_host.to_string(),

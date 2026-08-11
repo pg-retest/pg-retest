@@ -115,6 +115,7 @@ mod tests {
 
     fn make_profile(queries: Vec<Query>) -> WorkloadProfile {
         WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: Utc::now(),
             source_host: "localhost".into(),
@@ -140,6 +141,7 @@ mod tests {
     fn test_compile_strips_response_values() {
         let profile = make_profile(vec![
             Query {
+                original_sql: None,
                 sql: "INSERT INTO t (x) VALUES (1) RETURNING id".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -150,6 +152,7 @@ mod tests {
                 }]),
             },
             Query {
+                original_sql: None,
                 sql: "SELECT * FROM t WHERE id = 42".into(),
                 start_offset_us: 100,
                 duration_us: 50,
@@ -168,6 +171,7 @@ mod tests {
     #[test]
     fn test_compile_preserves_sequence_snapshot() {
         let profile = make_profile(vec![Query {
+            original_sql: None,
             sql: "INSERT INTO t (x) VALUES (1) RETURNING id".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -184,6 +188,7 @@ mod tests {
     #[test]
     fn test_compile_updates_capture_method() {
         let profile = make_profile(vec![Query {
+            original_sql: None,
             sql: "INSERT INTO t (x) VALUES (1) RETURNING id".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -200,6 +205,7 @@ mod tests {
     #[test]
     fn test_compile_no_response_values_error() {
         let profile = make_profile(vec![Query {
+            original_sql: None,
             sql: "SELECT 1".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -214,6 +220,7 @@ mod tests {
     fn test_compile_finds_references() {
         let profile = make_profile(vec![
             Query {
+                original_sql: None,
                 sql: "INSERT INTO orders (cid) VALUES (1) RETURNING id".into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -224,6 +231,7 @@ mod tests {
                 }]),
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO items (order_id) VALUES (42)".into(),
                 start_offset_us: 100,
                 duration_us: 50,
@@ -232,6 +240,7 @@ mod tests {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT * FROM orders WHERE id = 42".into(),
                 start_offset_us: 200,
                 duration_us: 30,
@@ -248,6 +257,7 @@ mod tests {
     #[test]
     fn test_compile_idempotent_capture_method() {
         let mut profile = make_profile(vec![Query {
+            original_sql: None,
             sql: "INSERT INTO t (x) VALUES (1) RETURNING id".into(),
             start_offset_us: 0,
             duration_us: 100,
@@ -270,6 +280,7 @@ mod tests {
         let select_sql = "SELECT * FROM t WHERE id = 99";
         let profile = make_profile(vec![
             Query {
+                original_sql: None,
                 sql: original_sql.into(),
                 start_offset_us: 0,
                 duration_us: 100,
@@ -280,6 +291,7 @@ mod tests {
                 }]),
             },
             Query {
+                original_sql: None,
                 sql: select_sql.into(),
                 start_offset_us: 100,
                 duration_us: 50,

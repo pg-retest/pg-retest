@@ -153,6 +153,7 @@ impl CsvLogCapture {
                 .map(|e| {
                     let offset = (e.log_time - first_time).num_microseconds().unwrap_or(0) as u64;
                     Query {
+                        original_sql: None,
                         sql: e.sql.clone(),
                         start_offset_us: offset,
                         duration_us: e.duration_us,
@@ -185,6 +186,7 @@ impl CsvLogCapture {
         };
 
         Ok(WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: Utc::now(),
             source_host: source_host.to_string(),

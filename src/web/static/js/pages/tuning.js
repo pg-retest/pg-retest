@@ -380,7 +380,7 @@ function tuningPage() {
                             </div>
                             <div>
                                 <label class="label">Target Connection String</label>
-                                <input class="input" type="text" id="tuning-target"
+                                <input class="input" type="text" id="tuning-target" list="conn-history-list"
                                        placeholder="postgres://user:pass@host:5432/dbname">
                             </div>
                             <div class="grid grid-cols-2 gap-4">
@@ -569,6 +569,7 @@ async function startTuning() {
         document.getElementById('tuning-cancel-btn').disabled = true;
         if (indicator) indicator.innerHTML = '';
     } else {
+        ConnHistory.remember(target);
         page.taskId = res.task_id;
         window.showToast('Tuning started', 'success');
     }

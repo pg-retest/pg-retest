@@ -46,6 +46,13 @@ pub fn build_router(state: AppState, auth_token: Option<String>) -> Router {
             "/workloads/{id}/synthesize",
             post(handlers::workloads::synthesize_workload),
         )
+        // Saved Connections
+        .route("/connections", get(handlers::connections::list_connections))
+        .route("/connections", post(handlers::connections::save_connection))
+        .route(
+            "/connections/{label}",
+            delete(handlers::connections::delete_connection),
+        )
         // Drift Check
         .route("/drift-check", post(handlers::drift::drift_check))
         // Proxy

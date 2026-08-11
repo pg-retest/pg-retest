@@ -31,8 +31,8 @@ pg-retest capture [OPTIONS]
 
 | Flag               | Default       | Description                                                      |
 |--------------------|---------------|------------------------------------------------------------------|
-| `--source-log`     | *(none)*      | Path to source log file (required for `pg-csv` and `mysql-slow`) |
-| `--source-type`    | `pg-csv`      | Source log type: `pg-csv`, `mysql-slow`, or `rds`                |
+| `--source-log`     | *(none)*      | Path to source log/extract file (required for every source type except `rds`) |
+| `--source-type`    | `pg-csv`      | Source log type: `pg-csv`, `mysql-slow`, `rds`, `mssql-trace`, `mssql-querystore`, `mssql-xevents` |
 | `-o`, `--output`   | `workload.wkl`| Output workload profile path                                    |
 | `--source-host`    | `unknown`     | Source host identifier stored in profile metadata                |
 | `--pg-version`     | `unknown`     | PostgreSQL version stored in profile metadata                    |
@@ -58,11 +58,24 @@ pg-retest capture --source-type rds --rds-instance my-db-instance \
 # Capture a specific RDS log file
 pg-retest capture --source-type rds --rds-instance my-db-instance \
     --rds-log-file error/postgresql.log.2024-03-08-10 -o rds-workload.wkl
+
+# Capture from a SQL Server Profiler trace-table CSV export
+pg-retest capture --source-type mssql-trace --source-log trace_export.csv \
+    --source-host mssql-prod-01 -o mssql-workload.wkl
+
+# Capture from a SQL Server Query Store CSV extract
+pg-retest capture --source-type mssql-querystore --source-log querystore_extract.csv \
+    --source-host mssql-prod-01 -o mssql-workload.wkl
+
+# Capture from a SQL Server Extended Events XML export
+pg-retest capture --source-type mssql-xevents --source-log xevents_export.xml \
+    --source-host mssql-prod-01 -o mssql-workload.wkl
 ```
 
 **Notes:**
 - MySQL slow log capture (`--source-type mysql-slow`) automatically applies the SQL transform pipeline to convert MySQL syntax to PostgreSQL-compatible SQL. MySQL-specific commands (`SHOW`, `SET NAMES`, `USE`) are skipped.
 - RDS capture (`--source-type rds`) requires the `aws` CLI to be installed and configured with appropriate IAM permissions. Large log files (>1MB) are downloaded in paginated chunks.
+- SQL Server capture (`mssql-trace`, `mssql-querystore`, `mssql-xevents`) is entirely file-based -- pg-retest never opens a live connection to SQL Server. See [SQL Server Capture](capture.md#sql-server-capture) for export steps, required columns/fields, and fidelity tradeoffs per format.
 - PII masking (`--mask-values`) replaces string literals with `$S` and numeric literals with `$N` using a hand-written character-level state machine that handles SQL edge cases (escaped quotes, dollar-quoting).
 
 ---

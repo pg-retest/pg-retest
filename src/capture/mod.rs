@@ -1,4 +1,9 @@
 pub mod csv_log;
 pub mod masking;
+pub mod mssql_querystore;
+pub mod mssql_trace;
+pub mod mssql_xevents;
 pub mod mysql_slow;
+pub mod oracle_awr;
+pub mod oracle_trace;
 pub mod rds;

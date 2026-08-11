@@ -124,6 +124,7 @@ pub fn apply_transform(
                     if *gn == rule.after_group && rng.gen::<f64>() < rule.frequency {
                         let offset = query.start_offset_us + query.duration_us;
                         new_queries.push(Query {
+                            original_sql: None,
                             sql: rule.sql.clone(),
                             start_offset_us: offset,
                             duration_us: rule.estimated_duration_us,
@@ -205,6 +206,7 @@ pub fn apply_transform(
                 .queries
                 .iter()
                 .map(|q| Query {
+                    original_sql: None,
                     sql: q.sql.clone(),
                     start_offset_us: q.start_offset_us + offset,
                     duration_us: q.duration_us,
@@ -251,6 +253,7 @@ pub fn apply_transform(
                     .map(|(qi, iq)| {
                         let offset = base_offset + qi as u64 * iq.duration_us;
                         Query {
+                            original_sql: None,
                             sql: iq.sql.clone(),
                             start_offset_us: offset,
                             duration_us: iq.duration_us,
@@ -288,6 +291,8 @@ pub fn apply_transform(
         .unwrap_or(0);
 
     Ok(WorkloadProfile {
+        // Preserve the input workload's origin dialect through transform-apply.
+        source_dialect: profile.source_dialect,
         version: profile.version,
         captured_at: profile.captured_at,
         source_host: profile.source_host.clone(),
@@ -312,6 +317,7 @@ mod tests {
 
     fn test_profile() -> WorkloadProfile {
         WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: chrono::Utc::now(),
             source_host: "localhost".into(),
@@ -324,6 +330,7 @@ mod tests {
                     database: "mydb".into(),
                     queries: vec![
                         Query {
+                            original_sql: None,
                             sql: "SELECT * FROM products WHERE id = $1".into(),
                             start_offset_us: 0,
                             duration_us: 100,
@@ -332,6 +339,7 @@ mod tests {
                             response_values: None,
                         },
                         Query {
+                            original_sql: None,
                             sql: "SELECT * FROM categories".into(),
                             start_offset_us: 200,
                             duration_us: 50,
@@ -340,6 +348,7 @@ mod tests {
                             response_values: None,
                         },
                         Query {
+                            original_sql: None,
                             sql: "INSERT INTO orders (product_id) VALUES ($1)".into(),
                             start_offset_us: 400,
                             duration_us: 80,
@@ -354,6 +363,7 @@ mod tests {
                     user: "app".into(),
                     database: "mydb".into(),
                     queries: vec![Query {
+                        original_sql: None,
                         sql: "SELECT * FROM products WHERE active = true".into(),
                         start_offset_us: 0,
                         duration_us: 150,

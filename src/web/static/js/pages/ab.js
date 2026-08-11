@@ -91,7 +91,7 @@ function abPage() {
                     </div>
                     <div class="col-span-8">
                         <label class="label">Connection String</label>
-                        <input class="input" type="text" value="${v.target}"
+                        <input class="input" type="text" value="${v.target}" list="conn-history-list"
                                onchange="window._abVariants[${i}].target = this.value"
                                placeholder="postgres://user:pass@host:5432/dbname">
                     </div>
@@ -156,6 +156,7 @@ async function startABTest() {
         window.showToast(res.error, 'error');
         document.getElementById('ab-start-btn').disabled = false;
     } else {
+        variants.forEach(v => ConnHistory.remember(v.target));
         window.showToast('A/B test started', 'success');
     }
 }

@@ -79,6 +79,11 @@ const api = {
     // Drift Check
     driftCheck(config) { return this.post('/drift-check', config); },
 
+    // Saved Connections
+    listConnections() { return this.get('/connections'); },
+    saveConnection(config) { return this.post('/connections', config); },
+    deleteConnection(label) { return this.del(`/connections/${encodeURIComponent(label)}`); },
+
     // Runs
     listRuns(params = {}) {
         const qs = new URLSearchParams(params).toString();

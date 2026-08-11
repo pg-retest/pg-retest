@@ -1,0 +1,12 @@
+# PG16 -vs- PG17 overlay for the demo stack.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.pg16-vs-pg17.yml up --build -d
+#   docker compose -f docker-compose.yml -f docker-compose.pg16-vs-pg17.yml down -v
+#
+# db-a stays PostgreSQL 16 (capture/baseline source); db-b becomes PostgreSQL 17
+# (replay target). Same schema, same seed data — the Demo page's replay/compare
+# flow becomes a PG16->PG17 upgrade validation instead of a same-version A/B.
+services:
+  db-b:
+    image: postgres:17

@@ -1,5 +1,55 @@
 // Form component helpers
 
+// Recently-used connection strings, remembered in localStorage so fields
+// don't start blank every visit. Populates the shared <datalist id="conn-history-list">
+// in index.html — any <input list="conn-history-list"> gets the native browser
+// suggestion dropdown for free.
+const ConnHistory = {
+    KEY: 'pg-retest:conn-history',
+    LIST_ID: 'conn-history-list',
+    MAX: 10,
+
+    _load() {
+        try { return JSON.parse(localStorage.getItem(this.KEY) || '[]'); } catch { return []; }
+    },
+
+    remember(connString) {
+        if (!connString) return;
+        const list = this._load().filter(c => c !== connString);
+        list.unshift(connString);
+        localStorage.setItem(this.KEY, JSON.stringify(list.slice(0, this.MAX)));
+        this.render();
+    },
+
+    render() {
+        const el = document.getElementById(this.LIST_ID);
+        if (!el) return;
+        const recent = this._load();
+        const saved = SavedConnections.all().map(c => c.conn_string);
+        const merged = [...new Set([...saved, ...recent])];
+        el.innerHTML = merged.map(c => `<option value="${c.replace(/"/g, '&quot;')}"></option>`).join('');
+    },
+};
+
+// Labeled connections saved server-side (SQLite, via /api/v1/connections) — managed on
+// the Settings page and also usable from the CLI as `--target @label` (see
+// `pg-retest connections`). Cached in memory here so ConnHistory.render() can fold them
+// into the shared datalist without every page having to fetch them itself.
+const SavedConnections = {
+    _cache: [],
+
+    async refresh() {
+        const res = await api.get('/connections');
+        this._cache = res.connections || [];
+        ConnHistory.render();
+        return this._cache;
+    },
+
+    all() {
+        return this._cache;
+    },
+};
+
 const Forms = {
     connectionStringBuilder(prefix = '') {
         return `

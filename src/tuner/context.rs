@@ -387,6 +387,7 @@ mod tests {
     #[test]
     fn test_extract_slow_queries() {
         let profile = WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: Utc::now(),
             source_host: "localhost".into(),
@@ -398,6 +399,7 @@ mod tests {
                 database: "testdb".into(),
                 queries: vec![
                     Query {
+                        original_sql: None,
                         sql: "SELECT * FROM orders".into(),
                         start_offset_us: 0,
                         duration_us: 5000,
@@ -406,6 +408,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "SELECT * FROM users".into(),
                         start_offset_us: 1000,
                         duration_us: 10000,
@@ -414,6 +417,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "SELECT * FROM orders".into(),
                         start_offset_us: 2000,
                         duration_us: 8000,
@@ -422,6 +426,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "SELECT * FROM users".into(),
                         start_offset_us: 3000,
                         duration_us: 3000,

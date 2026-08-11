@@ -559,6 +559,7 @@ mod tests {
     #[test]
     fn test_group_queries_by_tables() {
         let profile = WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: chrono::Utc::now(),
             source_host: "localhost".into(),
@@ -570,6 +571,7 @@ mod tests {
                 database: "testdb".into(),
                 queries: vec![
                     Query {
+            original_sql: None,
                         sql: "SELECT * FROM products WHERE id = $1".into(),
                         start_offset_us: 0,
                         duration_us: 100,
@@ -578,6 +580,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+            original_sql: None,
                         sql: "SELECT * FROM products JOIN categories ON products.category_id = categories.id".into(),
                         start_offset_us: 100,
                         duration_us: 200,
@@ -586,6 +589,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+            original_sql: None,
                         sql: "INSERT INTO orders (product_id) VALUES ($1)".into(),
                         start_offset_us: 300,
                         duration_us: 50,
@@ -626,6 +630,7 @@ mod tests {
     #[test]
     fn test_analysis_summary() {
         let profile = WorkloadProfile {
+            source_dialect: Default::default(),
             version: 2,
             captured_at: chrono::Utc::now(),
             source_host: "localhost:5432".into(),
@@ -637,6 +642,7 @@ mod tests {
                 database: "mydb".into(),
                 queries: vec![
                     Query {
+                        original_sql: None,
                         sql: "SELECT 1".into(),
                         start_offset_us: 0,
                         duration_us: 100,
@@ -645,6 +651,7 @@ mod tests {
                         response_values: None,
                     },
                     Query {
+                        original_sql: None,
                         sql: "SET statement_timeout = '30s'".into(),
                         start_offset_us: 100,
                         duration_us: 10,

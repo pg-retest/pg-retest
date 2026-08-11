@@ -5,6 +5,7 @@ use pg_retest::replay::{QueryResult, ReplayResults};
 
 fn make_source_profile() -> WorkloadProfile {
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 1,
         captured_at: Utc::now(),
         source_host: "source".into(),
@@ -16,6 +17,7 @@ fn make_source_profile() -> WorkloadProfile {
             database: "db".into(),
             queries: vec![
                 Query {
+                    original_sql: None,
                     sql: "SELECT 1".into(),
                     start_offset_us: 0,
                     duration_us: 100,
@@ -24,6 +26,7 @@ fn make_source_profile() -> WorkloadProfile {
                     response_values: None,
                 },
                 Query {
+                    original_sql: None,
                     sql: "SELECT 2".into(),
                     start_offset_us: 500,
                     duration_us: 200,
@@ -32,6 +35,7 @@ fn make_source_profile() -> WorkloadProfile {
                     response_values: None,
                 },
                 Query {
+                    original_sql: None,
                     sql: "UPDATE t SET x=1".into(),
                     start_offset_us: 1000,
                     duration_us: 300,
@@ -40,6 +44,7 @@ fn make_source_profile() -> WorkloadProfile {
                     response_values: None,
                 },
                 Query {
+                    original_sql: None,
                     sql: "SELECT 3".into(),
                     start_offset_us: 1500,
                     duration_us: 5000,
@@ -188,6 +193,7 @@ fn test_evaluate_outcome_errors_take_priority() {
 fn test_evaluate_outcome_pass_no_regressions_no_errors() {
     // Create clean results with no regressions or errors
     let source = WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "source".into(),
@@ -198,6 +204,7 @@ fn test_evaluate_outcome_pass_no_regressions_no_errors() {
             user: "app".into(),
             database: "db".into(),
             queries: vec![Query {
+                original_sql: None,
                 sql: "SELECT 1".into(),
                 start_offset_us: 0,
                 duration_us: 100,

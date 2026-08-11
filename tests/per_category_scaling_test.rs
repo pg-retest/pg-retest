@@ -8,6 +8,7 @@ fn make_profile(sessions: Vec<Session>) -> WorkloadProfile {
     let total_queries = sessions.iter().map(|s| s.queries.len() as u64).sum();
     let total_sessions = sessions.len() as u64;
     WorkloadProfile {
+        source_dialect: Default::default(),
         version: 2,
         captured_at: Utc::now(),
         source_host: "test".into(),
@@ -32,6 +33,7 @@ fn analytical_session(id: u64) -> Session {
         database: "analytics".into(),
         queries: vec![
             Query {
+                original_sql: None,
                 sql: "SELECT * FROM large_table".into(),
                 start_offset_us: 0,
                 duration_us: 50_000,
@@ -40,6 +42,7 @@ fn analytical_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT * FROM another_table".into(),
                 start_offset_us: 100_000,
                 duration_us: 30_000,
@@ -59,6 +62,7 @@ fn transactional_session(id: u64) -> Session {
         database: "oltp".into(),
         queries: vec![
             Query {
+                original_sql: None,
                 sql: "BEGIN".into(),
                 start_offset_us: 0,
                 duration_us: 50,
@@ -67,6 +71,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "INSERT INTO orders VALUES (1)".into(),
                 start_offset_us: 100,
                 duration_us: 500,
@@ -75,6 +80,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "COMMIT".into(),
                 start_offset_us: 700,
                 duration_us: 50,
@@ -83,6 +89,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "BEGIN".into(),
                 start_offset_us: 1000,
                 duration_us: 50,
@@ -91,6 +98,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "UPDATE orders SET status = 'shipped'".into(),
                 start_offset_us: 1100,
                 duration_us: 800,
@@ -99,6 +107,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "SELECT id FROM orders".into(),
                 start_offset_us: 2000,
                 duration_us: 300,
@@ -107,6 +116,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "COMMIT".into(),
                 start_offset_us: 2500,
                 duration_us: 50,
@@ -115,6 +125,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "BEGIN".into(),
                 start_offset_us: 3000,
                 duration_us: 50,
@@ -123,6 +134,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "DELETE FROM old_orders WHERE created < now()".into(),
                 start_offset_us: 3100,
                 duration_us: 400,
@@ -131,6 +143,7 @@ fn transactional_session(id: u64) -> Session {
                 response_values: None,
             },
             Query {
+                original_sql: None,
                 sql: "COMMIT".into(),
                 start_offset_us: 3600,
                 duration_us: 50,
