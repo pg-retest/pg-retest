@@ -19,6 +19,97 @@ function demoPage() {
         ],
         resettingDb: false,
 
+        // Full before/after breakdown for a ComparisonReport: stat cards, latency
+        // chart, per-percentile % delta, and the slowest individual queries —
+        // same shapes/fields the Compare page renders (src/web/static/js/pages/compare.js).
+        renderComparisonReport(report, chartId) {
+            const regressions = report.regressions || [];
+            return `
+                <div class="grid-stats">
+                    ${Status.statCard({ label: 'Source Avg', value: Tables.formatDuration(report.source_avg_latency_us), color: 'accent' })}
+                    ${Status.statCard({ label: 'Replay Avg', value: Tables.formatDuration(report.replay_avg_latency_us), color: 'amber' })}
+                    ${Status.statCard({ label: 'Errors', value: report.total_errors, color: report.total_errors > 0 ? 'danger' : 'accent' })}
+                    ${Status.statCard({ label: 'Regressions', value: regressions.length, color: regressions.length > 0 ? 'danger' : 'accent' })}
+                </div>
+                <div class="card">
+                    <div class="chart-container"><canvas id="${chartId}"></canvas></div>
+                </div>
+                <div class="card">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-3">Latency Percentiles</h4>
+                    <table class="data-table">
+                        <thead><tr><th>Metric</th><th class="text-right">Source</th><th class="text-right">Replay</th><th class="text-right">Change</th></tr></thead>
+                        <tbody>
+                            ${['p50', 'p95', 'p99', 'avg'].map(m => {
+                                const src = report[`source_${m}_latency_us`];
+                                const rep = report[`replay_${m}_latency_us`];
+                                const change = src > 0 ? ((rep - src) / src * 100) : 0;
+                                const changeClass = change > 10 ? 'text-danger' : change < -10 ? 'text-accent' : 'text-slate-400';
+                                return `<tr>
+                                    <td class="text-slate-300">${m.toUpperCase()}</td>
+                                    <td class="text-right">${Tables.formatDuration(src)}</td>
+                                    <td class="text-right">${Tables.formatDuration(rep)}</td>
+                                    <td class="text-right ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(1)}%</td>
+                                </tr>`;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                ${regressions.length > 0 ? `
+                <div class="card">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-3">Slower Queries</h4>
+                    <div class="overflow-x-auto">
+                        ${Tables.renderTable(chartId + '-regressions', [
+                            { label: 'Query', render: r => Tables.truncateSQL(r.sql, 70) },
+                            { label: 'Original', render: r => Tables.formatDuration(r.original_us), align: 'right' },
+                            { label: 'Replay', render: r => Tables.formatDuration(r.replay_us), align: 'right' },
+                            { label: 'Change', render: r => `<span class="text-danger font-semibold">+${r.change_pct.toFixed(1)}%</span>`, align: 'right' },
+                        ], regressions)}
+                    </div>
+                </div>` : ''}
+            `;
+        },
+
+        // Same idea for the A/B (multi-variant) report shape.
+        renderAbReport(report, chartId) {
+            const regressions = report.regressions || [];
+            const winner = report.variants.reduce((a, b) => a.avg_latency_us < b.avg_latency_us ? a : b);
+            return `
+                <div class="flex items-center gap-2 mb-3">
+                    <span class="badge badge-success">Winner: ${this.escapeHtml(winner.label)}</span>
+                </div>
+                <div class="grid grid-cols-${report.variants.length} gap-3 mb-3">
+                    ${report.variants.map(v => `
+                        <div class="card ${v.label === winner.label ? 'border-accent/40' : ''}">
+                            <div class="text-sm font-medium mb-2">${this.escapeHtml(v.label)}${v.label === winner.label ? ' \u{1F3C6}' : ''}</div>
+                            <div class="space-y-1 text-xs font-mono">
+                                <div class="flex justify-between"><span class="text-slate-500">avg</span><span>${Tables.formatDuration(v.avg_latency_us)}</span></div>
+                                <div class="flex justify-between"><span class="text-slate-500">p50</span><span>${Tables.formatDuration(v.p50_latency_us)}</span></div>
+                                <div class="flex justify-between"><span class="text-slate-500">p95</span><span>${Tables.formatDuration(v.p95_latency_us)}</span></div>
+                                <div class="flex justify-between"><span class="text-slate-500">p99</span><span>${Tables.formatDuration(v.p99_latency_us)}</span></div>
+                                <div class="flex justify-between"><span class="text-slate-500">errors</span><span>${v.total_errors}</span></div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="card">
+                    <div class="chart-container"><canvas id="${chartId}"></canvas></div>
+                </div>
+                ${regressions.length > 0 ? `
+                <div class="card">
+                    <h4 class="text-sm font-semibold text-slate-300 mb-3">Slower Queries</h4>
+                    <div class="overflow-x-auto">
+                        ${Tables.renderTable(chartId + '-regressions', [
+                            { label: 'Query', render: r => Tables.truncateSQL(r.sql, 60) },
+                            { label: 'Baseline', render: r => Tables.formatDuration(r.baseline_us), align: 'right' },
+                            { label: 'Variant', key: 'variant_label' },
+                            { label: 'Variant Time', render: r => Tables.formatDuration(r.variant_us), align: 'right' },
+                            { label: 'Change', render: r => `<span class="text-danger">+${r.change_pct.toFixed(1)}%</span>`, align: 'right' },
+                        ], regressions)}
+                    </div>
+                </div>` : ''}
+            `;
+        },
+
         async load() {
             const el = document.getElementById('demo-content');
             if (!el) return;
@@ -135,11 +226,16 @@ function demoPage() {
                     <div class="absolute left-6 top-14 w-0.5 h-6 ${isCompleted ? 'bg-accent/40' : 'bg-slate-800'}"></div>
                 ` : '';
 
-                const resultHtml = step.result ? `
-                    <div class="mt-3 p-3 rounded-lg bg-slate-950 border border-slate-800 overflow-x-auto">
-                        <pre class="text-xs font-mono text-slate-400 whitespace-pre-wrap">${this.escapeHtml(typeof step.result === 'string' ? step.result : JSON.stringify(step.result, null, 2))}</pre>
-                    </div>
-                ` : '';
+                // Step 3 (Compare) gets the full stat/delta/slow-query breakdown instead
+                // of a raw JSON dump. Wizard step responses are wrapped as { status, result: <report> }.
+                const isChartStep = step.id === 3 && step.result?.result?.source_avg_latency_us != null;
+                const resultHtml = step.result ? (
+                    isChartStep
+                        ? `<div class="mt-3 space-y-3">${this.renderComparisonReport(step.result.result, 'wizard-step-3-chart')}</div>`
+                        : `<div class="mt-3 p-3 rounded-lg bg-slate-950 border border-slate-800 overflow-x-auto">
+                               <pre class="text-xs font-mono text-slate-400 whitespace-pre-wrap">${this.escapeHtml(typeof step.result === 'string' ? step.result : JSON.stringify(step.result, null, 2))}</pre>
+                           </div>`
+                ) : '';
 
                 return `
                 <div class="relative ${!isLast ? 'pb-6' : ''}">
@@ -175,6 +271,11 @@ function demoPage() {
             }).join('');
 
             container.innerHTML = stepsHtml;
+
+            const step3 = this.wizardSteps.find(s => s.id === 3);
+            if (step3 && step3.status === 'completed' && step3.result?.result?.source_avg_latency_us != null) {
+                setTimeout(() => Charts.createLatencyChart('wizard-step-3-chart', step3.result.result), 50);
+            }
         },
 
         renderScenarios() {
@@ -209,11 +310,20 @@ function demoPage() {
                     ? '<span class="badge badge-danger">Failed</span>'
                     : '<span class="badge badge-info">Ready</span>';
 
-                const resultHtml = scenario.result ? `
-                    <div class="mt-3 p-3 rounded-lg bg-slate-950 border border-slate-800 overflow-x-auto">
-                        <pre class="text-xs font-mono text-slate-400 whitespace-pre-wrap">${this.escapeHtml(typeof scenario.result === 'string' ? scenario.result : JSON.stringify(scenario.result, null, 2))}</pre>
-                    </div>
-                ` : '';
+                // Migration (before/after) and A/B (multi-variant) results get the full
+                // stat/delta/slow-query breakdown instead of a raw JSON dump — same report
+                // shapes the Compare/A/B pages use. Scenario responses are wrapped as { status, result: <report> }.
+                const isLatencyChart = scenario.name === 'migration' && scenario.result?.result?.source_avg_latency_us != null;
+                const isVariantChart = scenario.name === 'ab' && scenario.result?.result?.variants;
+                const resultHtml = scenario.result ? (
+                    isLatencyChart
+                        ? `<div class="mt-3 space-y-3">${this.renderComparisonReport(scenario.result.result, `scenario-${scenario.name}-chart`)}</div>`
+                        : isVariantChart
+                        ? `<div class="mt-3 space-y-3">${this.renderAbReport(scenario.result.result, `scenario-${scenario.name}-chart`)}</div>`
+                        : `<div class="mt-3 p-3 rounded-lg bg-slate-950 border border-slate-800 overflow-x-auto">
+                               <pre class="text-xs font-mono text-slate-400 whitespace-pre-wrap">${this.escapeHtml(typeof scenario.result === 'string' ? scenario.result : JSON.stringify(scenario.result, null, 2))}</pre>
+                           </div>`
+                ) : '';
 
                 return `
                 <div class="card hover:border-slate-700 transition-colors">
@@ -250,6 +360,16 @@ function demoPage() {
             }).join('');
 
             container.innerHTML = cardsHtml;
+
+            this.scenarios.forEach(s => {
+                if (s.status !== 'completed' || !s.result?.result) return;
+                const report = s.result.result;
+                if (s.name === 'migration' && report.source_avg_latency_us != null) {
+                    setTimeout(() => Charts.createLatencyChart(`scenario-${s.name}-chart`, report), 50);
+                } else if (s.name === 'ab' && report.variants) {
+                    setTimeout(() => Charts.createComparisonBar(`scenario-${s.name}-chart`, report.variants), 50);
+                }
+            });
         },
 
         async runWizardStep(stepId) {
