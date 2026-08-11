@@ -1,6 +1,8 @@
 # Stage 1: Build
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.90-bookworm AS builder
 WORKDIR /src
+# pg_query's build.rs uses bindgen, which needs clang + libclang headers.
+RUN apt-get update && apt-get install -y --no-install-recommends libclang-dev && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN cargo build --release
 

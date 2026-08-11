@@ -49,14 +49,12 @@ rustls-native-certs = "0.8"
 dashmap = "6"
 socket2 = { version = "0.5", features = ["all"] }
 # Experimental AST-grade SQL dialect transpiler (MIT). OFF by default — only
-# compiled with `--features polyglot-transform`. Path dep to the verified local
-# clone (the source the integration was checked against); swap `path` for the
-# published `version = "0.5"` crate to productionize. default-features = false to
-# avoid the heavy all-dialects/semantic stack; lean MySQL→PostgreSQL feature set.
+# compiled with `--features polyglot-transform`. Published crates.io crate
+# (no local path override) — default-features = false to avoid the heavy
+# all-dialects/semantic stack; lean MySQL→PostgreSQL feature set.
 # Spec: retest-research/plan/include/polyglot-sql-transform.md §3 (FR-XFORM-4).
-polyglot-sql = { version = "0.5", path = "../retest-research/polyglot/crates/polyglot-sql", default-features = false, features = [
+polyglot-sql = { version = "=0.5.4", default-features = false, features = [
     "transpile",
-    "stacker",
     "dialect-postgresql",
     "dialect-mysql",
 ], optional = true }
