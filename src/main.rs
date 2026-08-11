@@ -38,6 +38,7 @@ fn main() -> Result<()> {
         Commands::Tune(args) => cmd_tune(args),
         Commands::ProxyCtl(args) => cmd_proxy_ctl(args),
         Commands::Compile(args) => cmd_compile(args),
+        Commands::Connections(args) => cmd_connections(args),
         #[cfg(feature = "polyglot-transform")]
         Commands::OracleReplay(args) => cmd_oracle_replay(args),
     }
@@ -277,6 +278,7 @@ fn cmd_replay(args: pg_retest::cli::ReplayArgs) -> Result<()> {
     } else {
         args.target.clone()
     };
+    let target = pg_retest::web::db::resolve_connection_string(&target, &args.data_dir)?;
 
     let profile = io::read_profile(&args.workload)?;
     let mode = if args.read_only {
@@ -554,6 +556,14 @@ fn cmd_inspect(args: pg_retest::cli::InspectArgs) -> Result<()> {
 
 fn cmd_proxy(args: pg_retest::cli::ProxyArgs) -> Result<()> {
     use pg_retest::proxy::{run_proxy, ProxyConfig};
+
+    let mut args = args;
+    if let Some(ref s) = args.source_db {
+        args.source_db = Some(pg_retest::web::db::resolve_connection_string(
+            s,
+            &args.data_dir,
+        )?);
+    }
 
     let duration = args.duration.as_deref().map(parse_duration).transpose()?;
 
@@ -1092,6 +1102,7 @@ fn cmd_tune(args: pg_retest::cli::TuneArgs) -> Result<()> {
     } else {
         args.target.clone()
     };
+    let target = pg_retest::web::db::resolve_connection_string(&target, &args.data_dir)?;
 
     let tls_mode = pg_retest::tls::parse_tls_mode(&args.tls_mode)?;
     let tls = pg_retest::tls::make_tls_connector(tls_mode, args.tls_ca_cert.as_deref())?;
@@ -1270,6 +1281,45 @@ fn cmd_compile(args: pg_retest::cli::CompileArgs) -> Result<()> {
         println!("(No --id-mode needed — IDs are pre-resolved for PITR + sequence reset)");
     } else {
         println!("\n(dry-run: no output written)");
+    }
+
+    Ok(())
+}
+
+fn cmd_connections(args: pg_retest::cli::ConnectionsArgs) -> Result<()> {
+    use pg_retest::cli::ConnectionsAction;
+    use pg_retest::web::db;
+
+    let conn = db::open_db(&args.data_dir)?;
+
+    match args.action {
+        ConnectionsAction::List => {
+            let connections = db::list_connections(&conn)?;
+            if connections.is_empty() {
+                println!(
+                    "No saved connections. Add one with: pg-retest connections add <label> <conn_string>"
+                );
+            } else {
+                println!("{:<24} CONNECTION STRING", "LABEL");
+                for c in connections {
+                    println!("{:<24} {}", c.label, c.conn_string);
+                }
+            }
+        }
+        ConnectionsAction::Add { label, conn_string } => {
+            db::upsert_connection(&conn, &label, &conn_string)?;
+            println!(
+                "Saved connection '{}'. Reference it elsewhere as @{}.",
+                label, label
+            );
+        }
+        ConnectionsAction::Rm { label } => {
+            if db::delete_connection_by_label(&conn, &label)? {
+                println!("Removed connection '{}'.", label);
+            } else {
+                anyhow::bail!("No saved connection named '{}'.", label);
+            }
+        }
     }
 
     Ok(())

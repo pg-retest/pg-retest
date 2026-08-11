@@ -87,9 +87,26 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_staging_capture ON capture_staging(capture_id);
+
+        CREATE TABLE IF NOT EXISTS saved_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT NOT NULL UNIQUE,
+            conn_string TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         ",
     )?;
     Ok(())
+}
+
+/// Open (creating if needed) the pg-retest.db in `data_dir`, with the schema initialized.
+/// Shared by the web server and any CLI command that needs the SQLite-backed state
+/// (e.g. `connections`, or resolving `@label` saved-connection references).
+pub fn open_db(data_dir: &std::path::Path) -> Result<Connection> {
+    std::fs::create_dir_all(data_dir)?;
+    let conn = Connection::open(data_dir.join("pg-retest.db"))?;
+    init_db(&conn)?;
+    Ok(conn)
 }
 
 // ── Workload CRUD ──────────────────────────────────────────────
@@ -664,6 +681,81 @@ pub fn list_tuning_reports(conn: &Connection, limit: Option<u32>) -> Result<Vec<
     Ok(rows)
 }
 
+// ── Saved Connection CRUD ───────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SavedConnection {
+    pub id: i64,
+    pub label: String,
+    pub conn_string: String,
+    pub created_at: Option<String>,
+}
+
+/// Save a connection under `label`, or update its conn_string if the label already exists.
+pub fn upsert_connection(conn: &Connection, label: &str, conn_string: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO saved_connections (label, conn_string) VALUES (?1, ?2)
+         ON CONFLICT(label) DO UPDATE SET conn_string = excluded.conn_string",
+        rusqlite::params![label, conn_string],
+    )?;
+    Ok(())
+}
+
+pub fn list_connections(conn: &Connection) -> Result<Vec<SavedConnection>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, label, conn_string, created_at FROM saved_connections ORDER BY label",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SavedConnection {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                conn_string: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn get_connection_by_label(conn: &Connection, label: &str) -> Result<Option<SavedConnection>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, label, conn_string, created_at FROM saved_connections WHERE label = ?1",
+    )?;
+    let mut rows = stmt.query_map([label], |row| {
+        Ok(SavedConnection {
+            id: row.get(0)?,
+            label: row.get(1)?,
+            conn_string: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    })?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn delete_connection_by_label(conn: &Connection, label: &str) -> Result<bool> {
+    let count = conn.execute("DELETE FROM saved_connections WHERE label = ?1", [label])?;
+    Ok(count > 0)
+}
+
+/// Resolve a connection-string CLI argument that may be a saved-connection reference
+/// (`@label`) against the pg-retest.db in `data_dir`. Returns `input` unchanged if it
+/// doesn't start with '@'.
+pub fn resolve_connection_string(input: &str, data_dir: &std::path::Path) -> Result<String> {
+    let Some(label) = input.strip_prefix('@') else {
+        return Ok(input.to_string());
+    };
+    let conn = open_db(data_dir)?;
+    get_connection_by_label(&conn, label)?
+        .map(|c| c.conn_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no saved connection named '{label}' (see `pg-retest connections list --data-dir {}`)",
+                data_dir.display()
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,5 +1003,54 @@ mod tests {
             redact_connection_string("host=localhost user=demo dbname=test"),
             "host=localhost user=demo dbname=test"
         );
+    }
+
+    #[test]
+    fn test_saved_connection_crud() {
+        let conn = test_db();
+        assert!(list_connections(&conn).unwrap().is_empty());
+
+        upsert_connection(&conn, "prod-replica", "host=prod dbname=app").unwrap();
+        let all = list_connections(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].label, "prod-replica");
+
+        // Re-adding the same label updates it rather than erroring or duplicating.
+        upsert_connection(&conn, "prod-replica", "host=prod2 dbname=app").unwrap();
+        let all = list_connections(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].conn_string, "host=prod2 dbname=app");
+
+        let got = get_connection_by_label(&conn, "prod-replica")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.conn_string, "host=prod2 dbname=app");
+        assert!(get_connection_by_label(&conn, "missing").unwrap().is_none());
+
+        assert!(delete_connection_by_label(&conn, "prod-replica").unwrap());
+        assert!(!delete_connection_by_label(&conn, "prod-replica").unwrap());
+        assert!(list_connections(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_resolve_connection_string() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_db(dir.path()).unwrap();
+        upsert_connection(&conn, "prod-replica", "host=prod dbname=app").unwrap();
+
+        // Non-'@' input passes through unchanged.
+        assert_eq!(
+            resolve_connection_string("host=localhost dbname=test", dir.path()).unwrap(),
+            "host=localhost dbname=test"
+        );
+
+        // '@label' resolves against the saved connection.
+        assert_eq!(
+            resolve_connection_string("@prod-replica", dir.path()).unwrap(),
+            "host=prod dbname=app"
+        );
+
+        // Unknown label is an error, not a silent pass-through.
+        assert!(resolve_connection_string("@missing", dir.path()).is_err());
     }
 }

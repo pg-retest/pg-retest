@@ -85,6 +85,9 @@ pub enum Commands {
     /// Compile a workload for deterministic replay (strip response_values, validate IDs)
     Compile(CompileArgs),
 
+    /// Manage saved database connections (shared with the web dashboard's Settings page)
+    Connections(ConnectionsArgs),
+
     /// Translate a MySQL workload to PostgreSQL, oracle-verified (experimental)
     #[cfg(feature = "polyglot-transform")]
     OracleReplay(OracleReplayArgs),
@@ -162,13 +165,18 @@ pub struct ReplayArgs {
     #[arg(long)]
     pub workload: PathBuf,
 
-    /// Target PostgreSQL connection string
+    /// Target PostgreSQL connection string. May reference a saved connection with
+    /// `@label` (see `pg-retest connections`).
     #[arg(long)]
     pub target: String,
 
     /// Read target connection string from this environment variable
     #[arg(long)]
     pub target_env: Option<String>,
+
+    /// Directory containing pg-retest.db, used to resolve `@label` in --target
+    #[arg(long, default_value = "./data")]
+    pub data_dir: PathBuf,
 
     /// Output results profile path (.wkl)
     #[arg(short, long, default_value = "results.wkl")]
@@ -338,9 +346,14 @@ pub struct ProxyArgs {
     #[arg(long, value_enum, default_value_t = crate::correlate::IdMode::None)]
     pub id_mode: crate::correlate::IdMode,
 
-    /// Source database connection string for sequence snapshot (required when --id-mode sequence or full)
+    /// Source database connection string for sequence snapshot (required when --id-mode sequence or full).
+    /// May reference a saved connection with `@label` (see `pg-retest connections`).
     #[arg(long)]
     pub source_db: Option<String>,
+
+    /// Directory containing pg-retest.db, used to resolve `@label` in --source-db
+    #[arg(long, default_value = "./data")]
+    pub data_dir: PathBuf,
 
     /// Auto-inject RETURNING for bare INSERTs and intercept currval/lastval
     #[arg(long, default_value_t = false)]
@@ -572,13 +585,18 @@ pub struct TuneArgs {
     #[arg(long)]
     pub workload: PathBuf,
 
-    /// Target PostgreSQL connection string
+    /// Target PostgreSQL connection string. May reference a saved connection with
+    /// `@label` (see `pg-retest connections`).
     #[arg(long)]
     pub target: String,
 
     /// Read target connection string from this environment variable
     #[arg(long)]
     pub target_env: Option<String>,
+
+    /// Directory containing pg-retest.db, used to resolve `@label` in --target
+    #[arg(long, default_value = "./data")]
+    pub data_dir: PathBuf,
 
     /// LLM provider: claude, openai, gemini, bedrock, ollama
     #[arg(long, default_value = "claude")]
@@ -677,4 +695,32 @@ pub struct CompileArgs {
     /// Print each ID reference found
     #[arg(long)]
     pub verbose: bool,
+}
+
+#[derive(clap::Args)]
+pub struct ConnectionsArgs {
+    #[command(subcommand)]
+    pub action: ConnectionsAction,
+
+    /// Directory containing pg-retest.db (same store the web dashboard's --data-dir uses)
+    #[arg(long, default_value = "./data")]
+    pub data_dir: PathBuf,
+}
+
+#[derive(Subcommand)]
+pub enum ConnectionsAction {
+    /// List saved connections
+    List,
+    /// Save (or update) a connection under a label
+    Add {
+        /// Label to save this connection under — reference it elsewhere as @label
+        label: String,
+        /// Connection string to save
+        conn_string: String,
+    },
+    /// Remove a saved connection
+    Rm {
+        /// Label of the connection to remove
+        label: String,
+    },
 }

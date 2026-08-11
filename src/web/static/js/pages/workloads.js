@@ -85,7 +85,7 @@ function workloadsPage() {
                             <div class="space-y-4">
                                 <div>
                                     <label class="label">Source DB Connection String <span class="text-danger">*</span></label>
-                                    <input class="input" name="source_db" required
+                                    <input class="input" name="source_db" required list="conn-history-list"
                                            placeholder="host=localhost dbname=mydb user=postgres password=...">
                                 </div>
                                 <div class="grid grid-cols-3 gap-3">
@@ -359,6 +359,7 @@ async function handleSynthesize(e) {
     if (res.error) {
         statusEl.innerHTML = Status.error(res.error);
     } else {
+        ConnHistory.remember(config.source_db);
         statusEl.innerHTML = `
             <div class="rounded-md bg-accent/10 border border-accent/20 p-3 text-sm">
                 <div class="text-accent font-medium mb-1">Synthesis complete</div>

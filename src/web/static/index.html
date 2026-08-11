@@ -46,6 +46,9 @@
 </head>
 <body class="bg-slate-950 text-slate-200 font-sans antialiased" x-data="app()" x-init="init()">
 
+    <!-- Shared history of recently-used connection strings (see js/components/forms.js ConnHistory) -->
+    <datalist id="conn-history-list"></datalist>
+
     <!-- Toast container -->
     <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2" x-data="toasts()">
         <template x-for="toast in items" :key="toast.id">
@@ -218,7 +221,7 @@
                                             </div>
                                             <div x-show="!proxyStatus?.running">
                                                 <label class="label">Target Connection String</label>
-                                                <input class="input mb-2" x-model="targetConn" placeholder="host=localhost dbname=mydb user=postgres password=...">
+                                                <input class="input mb-2" x-model="targetConn" list="conn-history-list" placeholder="host=localhost dbname=mydb user=postgres password=...">
                                                 <button @click="startProxy()" :disabled="stepLoading[1]"
                                                         class="btn btn-primary text-xs">
                                                     <span x-show="stepLoading[1]" class="spinner-sm mr-1"></span>
@@ -311,7 +314,7 @@
                                             </div>
                                             <div>
                                                 <label class="label">Target Connection String</label>
-                                                <input class="input" x-model="targetConn" placeholder="host=localhost dbname=target user=postgres password=...">
+                                                <input class="input" x-model="targetConn" list="conn-history-list" placeholder="host=localhost dbname=target user=postgres password=...">
                                             </div>
                                             <button @click="startReplay()" :disabled="stepLoading[4] || replayDone"
                                                     class="btn btn-primary text-xs">
@@ -429,11 +432,11 @@
                                             <div class="grid grid-cols-2 gap-4">
                                                 <div>
                                                     <label class="label">DB-A Connection String</label>
-                                                    <input class="input" x-model="driftDbA" placeholder="host=localhost dbname=source user=postgres password=...">
+                                                    <input class="input" x-model="driftDbA" list="conn-history-list" placeholder="host=localhost dbname=source user=postgres password=...">
                                                 </div>
                                                 <div>
                                                     <label class="label">DB-B Connection String</label>
-                                                    <input class="input" x-model="driftDbB" placeholder="host=localhost dbname=target user=postgres password=...">
+                                                    <input class="input" x-model="driftDbB" list="conn-history-list" placeholder="host=localhost dbname=target user=postgres password=...">
                                                 </div>
                                             </div>
                                             <button @click="runDriftCheck()" :disabled="stepLoading[6]"
@@ -495,7 +498,7 @@
                                             <div class="grid grid-cols-2 gap-4">
                                                 <div>
                                                     <label class="label">Source DB Connection (for schema introspection)</label>
-                                                    <input class="input" x-model="sourceConn" placeholder="host=localhost dbname=source user=postgres password=...">
+                                                    <input class="input" x-model="sourceConn" list="conn-history-list" placeholder="host=localhost dbname=source user=postgres password=...">
                                                 </div>
                                                 <div class="grid grid-cols-2 gap-4">
                                                     <div>
@@ -656,6 +659,10 @@
                 <div x-show="page === 'history'" x-data="historyPage()" x-init="load()" x-effect="if ($store.app.page === 'history') load()">
                     <div id="history-content"></div>
                 </div>
+                <!-- Settings -->
+                <div x-show="page === 'settings'" x-data="settingsPage()" x-init="load()" x-effect="if ($store.app.page === 'settings') load()">
+                    <div id="settings-content"></div>
+                </div>
                 <!-- Help -->
                 <div x-show="page === 'help'">
                     <div id="help-content"></div>
@@ -684,6 +691,7 @@
     <script src="/js/pages/tuning.js"></script>
     <script src="/js/pages/drift.js"></script>
     <script src="/js/pages/history.js"></script>
+    <script src="/js/pages/settings.js"></script>
     <script src="/js/pages/help.js"></script>
     <script src="/js/app.js"></script>
 </body>
